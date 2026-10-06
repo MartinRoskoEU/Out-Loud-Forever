@@ -16,6 +16,7 @@
     ],
     "Lua.diagnostics.globals": [
         "Add",
-        "Settings"
+        "Settings",
+        "STANDARD_TEXT_FONT"
     ]
 }
