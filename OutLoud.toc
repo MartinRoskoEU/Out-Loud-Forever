@@ -7,6 +7,7 @@
 ## LoadSavedVariablesFirst: 1
 
 Core\Namespace.lua
+Core\Database.lua
 Core\Init.lua
 
 UI\SettingsPage.lua

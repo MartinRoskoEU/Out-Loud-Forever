@@ -9,6 +9,7 @@ frame:SetScript("OnEvent", function(_, event, loadedAddonName)
     end
 
     OutLoud.Database:Initialize()
+    OutLoud.SettingsPage:Initialize()
 
     OutLoud.Loaded = true
 end)
