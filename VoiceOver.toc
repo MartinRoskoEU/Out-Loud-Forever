@@ -1,0 +1,8 @@
+## Interface: 16001
+## Title: Out Loud
+## Notes: Text-to-speech addon for World of Warcraft: Forever
+## Author: Martin Rosko
+## Version: 0.1.0
+
+Core\Namespace.lua
+Core\Init.lua
