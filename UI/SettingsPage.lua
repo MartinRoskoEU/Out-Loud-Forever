@@ -169,6 +169,25 @@ function SettingsPage:CreateVoiceRows(anchor)
         if raceInfo then
             local currentRaceID = raceID
 
+            for _, gender in pairs(OutLoud.VoiceMappings.Genders) do
+                local voiceID = OutLoud.Database:GetVoice(currentRaceID, gender)
+
+                if voiceID ~= nil then
+                    local available = false
+
+                    for _, option in ipairs(voiceOptions) do
+                        if option.value == voiceID then
+                            available = true
+                            break
+                        end
+                    end
+
+                    if not available then
+                        OutLoud.Database:SetVoice(currentRaceID, gender, nil)
+                    end
+                end
+            end
+
             local row = OutLoud.Classes.VoiceRow:New(
                 self.Panel,
                 VOICES_LAYOUT
