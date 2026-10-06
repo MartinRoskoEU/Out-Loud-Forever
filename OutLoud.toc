@@ -6,8 +6,13 @@
 ## SavedVariables: OutLoudDB
 ## LoadSavedVariablesFirst: 1
 
+Data\VoiceMappings.lua
+
 Core\Namespace.lua
 Core\Database.lua
+Core\TTS.lua
 Core\Init.lua
 
+UI\Controls\ComboBox.lua
+UI\Controls\VoiceRow.lua
 UI\SettingsPage.lua
