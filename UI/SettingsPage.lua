@@ -76,7 +76,7 @@ function SettingsPage:CreateVoicesSection()
 
     raceLabel:SetWidth(VOICES_LAYOUT.raceWidth)
     raceLabel:SetJustifyH("LEFT")
-    raceLabel:SetText("Race")
+    raceLabel:SetText("Family")
 
     local femaleCenter = VOICES_LAYOUT.rightPadding
         + (VOICES_LAYOUT.voiceControlWidth / 2)
@@ -149,122 +149,112 @@ function SettingsPage:GetVoiceOptions()
 end
 
 function SettingsPage:CreateVoiceRows(anchor)
-    local races = OutLoud.VoiceMappings:GetRaces()
-    local raceIDs = {}
+    local selection = OutLoud.VoiceSelection
+    local families = selection:GetFamilies()
     local voiceOptions = self:GetVoiceOptions()
-
-    for raceID in pairs(races) do
-        table.insert(raceIDs, raceID)
-    end
-
-    table.sort(raceIDs)
 
     self.VoiceRows = {}
 
     local previousFrame
 
-    for _, raceID in ipairs(raceIDs) do
-        local raceInfo = C_CreatureInfo.GetRaceInfo(raceID)
+    for _, family in ipairs(families) do
+        local currentFamily = family
 
-        if raceInfo then
-            local currentRaceID = raceID
+        for _, gender in pairs(selection.Genders) do
+            local voiceID = OutLoud.Database:GetVoice(currentFamily, gender)
 
-            for _, gender in pairs(OutLoud.VoiceMappings.Genders) do
-                local voiceID = OutLoud.Database:GetVoice(currentRaceID, gender)
+            if voiceID ~= nil then
+                local available = false
 
-                if voiceID ~= nil then
-                    local available = false
-
-                    for _, option in ipairs(voiceOptions) do
-                        if option.value == voiceID then
-                            available = true
-                            break
-                        end
-                    end
-
-                    if not available then
-                        OutLoud.Database:SetVoice(currentRaceID, gender, nil)
+                for _, option in ipairs(voiceOptions) do
+                    if option.value == voiceID then
+                        available = true
+                        break
                     end
                 end
-            end
 
-            local row = OutLoud.Classes.VoiceRow:New(
-                self.Panel,
-                VOICES_LAYOUT
-            )
-
-            if previousFrame then
-                row.Frame:SetPoint(
-                    "TOPLEFT",
-                    previousFrame,
-                    "BOTTOMLEFT",
-                    0,
-                    -4
-                )
-
-                row.Frame:SetPoint(
-                    "TOPRIGHT",
-                    previousFrame,
-                    "BOTTOMRIGHT",
-                    0,
-                    -4
-                )
-            else
-                row.Frame:SetPoint(
-                    "TOPLEFT",
-                    anchor,
-                    "BOTTOMLEFT",
-                    0,
-                    -4
-                )
-
-                row.Frame:SetPoint(
-                    "TOPRIGHT",
-                    anchor,
-                    "BOTTOMRIGHT",
-                    0,
-                    -4
-                )
-            end
-
-            row:Setup(
-                raceInfo.raceName,
-                voiceOptions,
-
-                function()
-                    return OutLoud.Database:GetVoice(
-                        currentRaceID,
-                        OutLoud.VoiceMappings.Genders.MALE
-                    )
-                end,
-
-                function(voiceID)
-                    OutLoud.Database:SetVoice(
-                        currentRaceID,
-                        OutLoud.VoiceMappings.Genders.MALE,
-                        voiceID
-                    )
-                end,
-
-                function()
-                    return OutLoud.Database:GetVoice(
-                        currentRaceID,
-                        OutLoud.VoiceMappings.Genders.FEMALE
-                    )
-                end,
-
-                function(voiceID)
-                    OutLoud.Database:SetVoice(
-                        currentRaceID,
-                        OutLoud.VoiceMappings.Genders.FEMALE,
-                        voiceID
-                    )
+                if not available then
+                    OutLoud.Database:SetVoice(currentFamily, gender, nil)
                 end
-            )
-
-            table.insert(self.VoiceRows, row)
-            previousFrame = row.Frame
+            end
         end
+
+        local row = OutLoud.Classes.VoiceRow:New(
+            self.Panel,
+            VOICES_LAYOUT
+        )
+
+        if previousFrame then
+            row.Frame:SetPoint(
+                "TOPLEFT",
+                previousFrame,
+                "BOTTOMLEFT",
+                0,
+                -4
+            )
+
+            row.Frame:SetPoint(
+                "TOPRIGHT",
+                previousFrame,
+                "BOTTOMRIGHT",
+                0,
+                -4
+            )
+        else
+            row.Frame:SetPoint(
+                "TOPLEFT",
+                anchor,
+                "BOTTOMLEFT",
+                0,
+                -4
+            )
+
+            row.Frame:SetPoint(
+                "TOPRIGHT",
+                anchor,
+                "BOTTOMRIGHT",
+                0,
+                -4
+            )
+        end
+
+        row:Setup(
+            selection:GetFamilyName(currentFamily),
+            voiceOptions,
+
+            function()
+                return OutLoud.Database:GetVoice(
+                    currentFamily,
+                    selection.Genders.MALE
+                )
+            end,
+
+            function(voiceID)
+                OutLoud.Database:SetVoice(
+                    currentFamily,
+                    selection.Genders.MALE,
+                    voiceID
+                )
+            end,
+
+            function()
+                return OutLoud.Database:GetVoice(
+                    currentFamily,
+                    selection.Genders.FEMALE
+                )
+            end,
+
+            function(voiceID)
+                OutLoud.Database:SetVoice(
+                    currentFamily,
+                    selection.Genders.FEMALE,
+                    voiceID
+                )
+            end
+        )
+
+        table.insert(self.VoiceRows, row)
+        previousFrame = row.Frame
     end
 
     return previousFrame or anchor

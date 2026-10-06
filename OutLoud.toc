@@ -9,6 +9,7 @@
 Data\VoiceMappings.lua
 
 Core\Namespace.lua
+Core\VoiceSelection.lua
 Core\Database.lua
 Core\TTS.lua
 
