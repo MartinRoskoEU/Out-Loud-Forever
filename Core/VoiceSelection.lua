@@ -13,15 +13,8 @@ function VoiceSelection:GetFamilies()
     local mappings = OutLoud.VoiceMappings
     local unique = {}
 
-    if mappings.Families then
-        for _, family in pairs(mappings.Families) do
-            unique[family] = true
-        end
-    else
-        -- Keep the checked-in legacy export usable until it is regenerated.
-        for family in pairs(mappings.Races or {}) do
-            unique[family] = true
-        end
+    for _, family in pairs(mappings.Families) do
+        unique[family] = true
     end
 
     local families = {}
@@ -43,21 +36,7 @@ function VoiceSelection:GetFamilyName(family)
 end
 
 function VoiceSelection:GetFamily(fileDataID)
-    local mappings = OutLoud.VoiceMappings
-    local mapping = mappings.Models[fileDataID]
-
-    if type(mapping) == "string" then
-        return mapping
-    end
-
-    -- Legacy export compatibility only; its model gender is never used.
-    if type(mapping) == "table" and not mappings.Families then
-        for family, raceID in pairs(mappings.Races or {}) do
-            if raceID == mapping.race then
-                return family
-            end
-        end
-    end
+    return OutLoud.VoiceMappings.Models[fileDataID]
 end
 
 -- The caller supplies a PlayerModel already loaded for this unit.

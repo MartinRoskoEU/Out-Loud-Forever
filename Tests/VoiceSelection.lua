@@ -1,4 +1,12 @@
 -- Run from the addon root with Lua 5.1: lua Tests/VoiceSelection.lua
+-- Keep mock APIs local so the editor cannot infer game API types from them.
+local environment = setmetatable({}, { __index = _G })
+environment._G = environment
+
+-- Standalone Lua supplies these APIs; the WoW editor configuration omits them.
+local LoadFile = assert(rawget(_G, "loadfile"), "Run tests with standalone Lua 5.1")
+local FileIO = assert(rawget(_G, "io"), "Run tests with standalone Lua 5.1")
+
 local function Equal(actual, expected, message)
     assert(actual == expected, (message or "Mismatch")
         .. ": expected " .. tostring(expected) .. ", got " .. tostring(actual))
@@ -25,21 +33,21 @@ local function Frame()
 end
 
 local frames = {}
-function CreateFrame()
+function environment.CreateFrame()
     local frame = Frame()
     table.insert(frames, frame)
     return frame
 end
 
 local sex, exists = 2, true
-function UnitSex() return sex end
-function UnitExists() return exists end
-function UnitName() return "Test NPC" end
-Settings = {
-    RegisterCanvasLayoutCategory = function() return {} end,
-    RegisterAddOnCategory = function() end,
+function environment.UnitSex() return sex end
+function environment.UnitExists() return exists end
+function environment.UnitName() return "Test NPC" end
+environment.Settings = {
+    RegisterCanvasLayoutCategory = function(_panel, _name) return {} end,
+    RegisterAddOnCategory = function(_category) end,
 }
-C_VoiceChat = { GetTtsVoices = function()
+environment.C_VoiceChat = { GetTtsVoices = function()
     local voices = {}
     for id = 0, 60 do
         table.insert(voices, { voiceID = id, name = "Voice " .. id })
@@ -49,34 +57,36 @@ end }
 
 local addon = {}
 local function Load(path)
-    assert(loadfile(path))("OutLoud", addon)
+    local chunk = assert(LoadFile(path))
+    setfenv(chunk, environment)
+    chunk("OutLoud", addon)
 end
 
 -- Load the real files in their declared order and exercise ADDON_LOADED.
-for line in io.lines("OutLoud.toc") do
+for line in FileIO.lines("OutLoud.toc") do
     if line:match("%.lua$") then
         Load((line:gsub("\\", "/")))
     end
 end
 
 local selection = addon.VoiceSelection
-Equal(selection:GetFamily(959310), "UNDEAD", "Checked-in legacy export")
-Equal(#selection:GetFamilies(), 8, "Legacy family catalog")
-local legacyMappings = addon.VoiceMappings
+local exportedMappings = addon.VoiceMappings
+local exportedFamilies = {}
+local exportedCount = 0
+for _, family in pairs(exportedMappings.Families) do
+    if not exportedFamilies[family] then
+        exportedFamilies[family] = true
+        exportedCount = exportedCount + 1
+    end
+end
+Equal(#selection:GetFamilies(), exportedCount, "Generated family catalog")
+for fileDataID, family in pairs(exportedMappings.Models) do
+    Equal(type(family), "string", "Generated model maps directly to a family")
+    assert(exportedFamilies[family], "Model family is missing from the catalog")
+    Equal(selection:GetFamily(fileDataID), family, "Generated model lookup")
+end
 
--- Replace the export completely: no Races, Genders, or GetRaces helper.
-addon.VoiceMappings = {
-    Families = {
-        HUMAN = "HUMAN", UNDEAD = "UNDEAD", SKYBORNE = "SKYBORNE",
-        SKYBORNE_ALIAS = "SKYBORNE", NIGHT_ELF = "NIGHT_ELF",
-        FUTURE_FAMILY = "FUTURE_FAMILY",
-    },
-    Models = {
-        [959310] = "UNDEAD", [7478487] = "SKYBORNE",
-        [7478494] = "SKYBORNE", [100] = "HUMAN", [101] = "HUMAN",
-    },
-}
-OutLoudDB = {
+local savedVariables = {
     voices = {
         [5] = { [2] = 40, [3] = 41 },
         UNDEAD = { [2] = 50 },
@@ -86,6 +96,7 @@ OutLoudDB = {
     },
     readingMode = "split",
 }
+environment.OutLoudDB = savedVariables
 local initFrame = frames[#frames]
 initFrame.scripts.OnEvent(initFrame, "ADDON_LOADED", "OtherAddon")
 Equal(addon.Loaded, false, "Ignore unrelated addon event")
@@ -93,10 +104,10 @@ initFrame.scripts.OnEvent(initFrame, "ADDON_LOADED", "OutLoud")
 Equal(addon.Loaded, true, "TOC initialization")
 Equal(addon.Database:GetVoice("UNDEAD", 2), 50, "Keep newer assignment")
 Equal(addon.Database:GetVoice("UNDEAD", 3), 41, "Migrate legacy female")
-Equal(OutLoudDB.voices[5][2], 40, "Keep numeric backup")
-Equal(OutLoudDB.voices[999][2], 60, "Keep unknown legacy keys")
+Equal(savedVariables.voices[5][2], 40, "Keep numeric backup")
+Equal(savedVariables.voices[999][2], 60, "Keep unknown legacy keys")
 Equal(addon.Database:GetReadingMode(), "split", "Keep reading settings")
-Equal(OutLoudDB.voiceSettingsVersion, 2, "Migration marker")
+Equal(savedVariables.voiceSettingsVersion, 2, "Migration marker")
 
 local modelID = 959310
 local model = { GetModelFileID = function() return modelID end }
@@ -112,6 +123,37 @@ local function Resolve(id, unitSex, family, gender, voice)
     Equal(info.reason, nil, "Successful lookup")
 end
 
+-- Verify Options and runtime selection against the actual generated export first.
+Equal(#addon.UI.SettingsPage.VoiceRows, exportedCount, "Generated Options row count")
+local exportedSkyborneRows = 0
+for _, row in ipairs(addon.UI.SettingsPage.VoiceRows) do
+    if row.RaceLabel.textValue == "Skyborne" then
+        exportedSkyborneRows = exportedSkyborneRows + 1
+        assert(row.MaleComboBox and row.FemaleComboBox, "Both generated Skyborne selectors")
+    end
+end
+Equal(exportedSkyborneRows, 1, "Generated export has one Skyborne row")
+Resolve(959310, 2, "UNDEAD", "MALE", 50)
+Resolve(997378, 3, "UNDEAD", "FEMALE", 41)
+Resolve(7478487, 2, "SKYBORNE", "MALE", 10)
+Resolve(7478494, 3, "SKYBORNE", "FEMALE", 11)
+Resolve(1000764, 2, "HUMAN", "MALE", 0)
+Resolve(1011653, 3, "HUMAN", "FEMALE", 13)
+
+-- Replace the export completely: no Races, Genders, or GetRaces helper.
+addon.VoiceMappings = {
+    Families = {
+        HUMAN = "HUMAN", UNDEAD = "UNDEAD", SKYBORNE = "SKYBORNE",
+        SKYBORNE_ALIAS = "SKYBORNE", NIGHT_ELF = "NIGHT_ELF",
+        FUTURE_FAMILY = "FUTURE_FAMILY",
+    },
+    Models = {
+        [959310] = "UNDEAD", [7478487] = "SKYBORNE",
+        [7478494] = "SKYBORNE", [100] = "HUMAN", [101] = "HUMAN",
+    },
+}
+addon.UI.SettingsPage:CreateVoiceRows(Frame())
+
 Resolve(959310, 2, "UNDEAD", "MALE", 50)
 Resolve(959310, 3, "UNDEAD", "FEMALE", 41)
 Resolve(7478487, 2, "SKYBORNE", "MALE", 10)
@@ -123,11 +165,6 @@ Resolve(100, 2, "HUMAN", "MALE", 0)
 Resolve(101, 2, "HUMAN", "MALE", 0)
 Resolve(100, 3, "HUMAN", "FEMALE", 13)
 Resolve(101, 3, "HUMAN", "FEMALE", 13)
-
-local newMappings = addon.VoiceMappings
-addon.VoiceMappings = legacyMappings
-Resolve(959310, 3, "UNDEAD", "FEMALE", 41)
-addon.VoiceMappings = newMappings
 
 local function Unresolved(id, unitSex, reason)
     modelID, sex = id, unitSex

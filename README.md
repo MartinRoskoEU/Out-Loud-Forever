@@ -16,9 +16,9 @@ The original numeric race settings are copied once to family keys without
 overwriting existing family assignments. Numeric entries remain as backups;
 `voiceSettingsVersion = 2` prevents reimporting voices the user later clears.
 This migration uses the original eight-race schema, not the available family
-catalog. The checked-in legacy mapping export is still supported by a small
-adapter; replace `Data/VoiceMappings.lua` with generator output when ready.
-Model gender is ignored even with the legacy export.
+catalog. `Data/VoiceMappings.lua` contains only family identities and model-to-
+family mappings and can be replaced directly with new generator output.
+Generated data does not provide gender or addon runtime helpers.
 
 With a quest dialog open, run this Lua command in Toolbox Console to inspect
 the current `questnpc`. It uses a separate model and prints once after a short
