@@ -37,8 +37,11 @@ local function StopPlayback(self)
     end
 
     self.Stopping = true
-    C_VoiceChat.StopSpeakingText()
+    local ok, message = pcall(C_VoiceChat.StopSpeakingText)
     self.Stopping = false
+    if not ok then
+        OutLoud:Error("TTS stop failed:", tostring(message))
+    end
 end
 
 local function NotifySessionEnded(session, reason)

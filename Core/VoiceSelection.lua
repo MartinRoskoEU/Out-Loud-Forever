@@ -24,28 +24,15 @@ local playerRaceFamilies = {
     Goblin = "GOBLIN",
 }
 
-function VoiceSelection:ResolvePlayer()
-    local info = {}
-    if not UnitExists("player") then
-        info.reason = "unit-unavailable"
-        return nil, info
+local function GetGender(sex)
+    if sex == VoiceSelection.Genders.MALE then
+        return "MALE"
+    elseif sex == VoiceSelection.Genders.FEMALE then
+        return "FEMALE"
     end
+end
 
-    info.name = UnitName("player")
-    info.raceName, info.raceToken, info.raceID = UnitRace("player")
-    info.sex = UnitSex("player")
-    if info.sex == self.Genders.MALE then
-        info.gender = "MALE"
-    elseif info.sex == self.Genders.FEMALE then
-        info.gender = "FEMALE"
-    end
-
-    local familyKey = playerRaceFamilies[info.raceToken]
-    info.family = familyKey and OutLoud.VoiceMappings.Families[familyKey]
-    if not info.family then
-        info.reason = "unknown-player-race"
-        return nil, info
-    end
+local function ResolveConfiguredVoice(info)
     if not info.gender then
         info.reason = "unknown-sex"
         return nil, info
@@ -56,6 +43,27 @@ function VoiceSelection:ResolvePlayer()
         info.reason = "voice-not-set"
     end
     return info.voiceID, info
+end
+
+function VoiceSelection:ResolvePlayer()
+    local info = {}
+    if not UnitExists("player") then
+        info.reason = "unit-unavailable"
+        return nil, info
+    end
+
+    info.name = UnitName("player")
+    info.raceName, info.raceToken, info.raceID = UnitRace("player")
+    info.sex = UnitSex("player")
+    info.gender = GetGender(info.sex)
+
+    local familyKey = playerRaceFamilies[info.raceToken]
+    info.family = familyKey and OutLoud.VoiceMappings.Families[familyKey]
+    if not info.family then
+        info.reason = "unknown-player-race"
+        return nil, info
+    end
+    return ResolveConfiguredVoice(info)
 end
 
 function VoiceSelection:GetFamilies()
@@ -100,12 +108,7 @@ function VoiceSelection:Resolve(unit, model)
 
     info.name = UnitName(unit)
     info.sex = UnitSex(unit)
-
-    if info.sex == self.Genders.MALE then
-        info.gender = "MALE"
-    elseif info.sex == self.Genders.FEMALE then
-        info.gender = "FEMALE"
-    end
+    info.gender = GetGender(info.sex)
 
     info.modelFileID = model and model:GetModelFileID()
 
@@ -121,16 +124,5 @@ function VoiceSelection:Resolve(unit, model)
         return nil, info
     end
 
-    if not info.gender then
-        info.reason = "unknown-sex"
-        return nil, info
-    end
-
-    info.voiceID = OutLoud.Database:GetVoice(info.family, info.sex)
-
-    if info.voiceID == nil then
-        info.reason = "voice-not-set"
-    end
-
-    return info.voiceID, info
+    return ResolveConfiguredVoice(info)
 end

@@ -11,6 +11,9 @@ On addon load, initialization prepares the database, Options, Talking Head UI,
 and QuestFrame/Quest Log integrations. `Core/Narration.lua` shares presentation
 ownership and TTS callbacks between the two UI entry points.
 The speech event frame is created on the first valid speech request.
+The addon initialization frame unregisters `ADDON_LOADED` and releases its handler
+after setup. Quest integrations retain their own deferred-load observers only
+until the required Blizzard UI globals exist.
 
 ## Voice data, resolution, and saved settings
 
@@ -32,9 +35,14 @@ The speech event frame is created on the first valid speech request.
   and combines that family with `UnitSex("player")` and the existing database.
   It requires no inspection model. Unknown race tokens, unknown sex, and unset
   voices return no voice, with a reason; there is no fallback for custom races.
-- The original eight-race numeric settings are copied once to family keys without
-  overwriting existing family assignments. Numeric entries remain as backups;
-  `voiceSettingsVersion = 2` prevents restoring voices the user later clears.
+
+NPC and player resolution share gender naming and configured-voice lookup;
+their model/race lookups and failure reasons remain distinct. Missing or malformed
+family settings return no voice. Selecting a voice repairs that family's table
+without replacing other assignments. Reading mode is normalized to `full` or
+`split` during initialization and through database access; invalid values use the
+existing `full` default. Voice settings use only the current family-keyed schema;
+the development addon does not migrate earlier numeric race settings.
 
 ## Speech controller API
 
@@ -56,6 +64,9 @@ The controller's existing event frame also handles `PLAYER_LOGOUT`, including
 UI teardown for `/reload`, by calling `Stop()` before the Lua state is discarded.
 This cancels the active session and stops native playback. The shutdown event and
 actual audio interruption still require verification in WoW: Forever.
+Native stop errors are caught and printed in red, with the synchronous-event
+guard released and the session-end callback still notified. A native engine that
+rejects stopping may continue audio; Lua cleanup cannot guarantee native recovery.
 
 All three Speak methods accept an optional third argument, `onSessionEnded`.
 The controller calls `onSessionEnded(reason, sessionID)` when that session ends:
@@ -116,10 +127,14 @@ lua Tests/QuestIntegration.lua
 ```
 
 Voice-selection tests exercise the generated mappings, real Options controls,
-SavedVariables migration, and addon load order. Speech tests mock the native
+saved settings, and addon load order. Speech tests mock the native
 engine and playback events to check streaming, mode dispatch, cancellation,
 stale/duplicate bookmarks, completion, failures, and input validation. Model
 loading, rendering, and actual audio still require in-game checks.
+The Settings mocks model the modern checkbox, slider/stepper callbacks, and
+scrollbar percentages. The TOC is loaded in order, but Talking Head initialization
+is stubbed because standalone Lua cannot instantiate its XML template. XML paths
+and animation targets must be checked separately; these tests do not render it.
 
 Quest-integration tests exercise the real UI module and voice resolver with mocked
 frames, units, model loading, Talking Head presentation, and the native speech
@@ -128,6 +143,9 @@ to Talking Head and TTS, call ordering, repeated clicks, deferred UI loading,
 unresolved inputs, and failed speech submission. Additional checks use the real
 TTS dispatcher to verify saved reading modes and session replacement. The mocks
 do not prove Forever's actual event ordering, UI rendering, or model readiness.
+They also check player fallback and cancellation of pending automatic requests
+on manual click, close, disabling, quest/page replacement, or another TTS session,
+including a callback delivered after cancellation.
 
 ## Quest narration
 
@@ -136,9 +154,10 @@ parented to `QuestFrame` and one reusable inspection `PlayerModel`. The model us
 `CreateFrame("PlayerModel")` without a parent or explicit `Hide()`, matching the
 user's working in-game inspection script. The button
 is 100 by 22, labelled **Out Loud**, and anchored with
-`SetPoint("BOTTOM", QuestFrame, "BOTTOM", -15, 38)`. This puts it in a separate
-row below the Vanilla export's native action buttons at bottom offsets 72/73.
-Blizzard controls are not moved or resized; placement still needs a client check.
+a separate gap frame between the current panel's native left and right action
+buttons. If only one action button is shown, Out Loud sits beside it; if neither
+is shown, Out Loud hides. Blizzard controls are not moved or resized; placement
+still needs a client check.
 
 `UpdateButtonVisibility()` centralizes visibility. It requires an open
 `QuestFrame`, exactly one shown dialogue panel, a usable text API, and nonempty
@@ -157,6 +176,7 @@ Initialization adds `HookScript` callbacks after Blizzard's handlers:
 
 - `QuestFrame`: `OnEvent`, `OnShow`, and `OnHide`.
 - All four panels above: `OnShow` and `OnHide`.
+- Available native action buttons: `OnShow` and `OnHide`.
 
 The `OnEvent` hook refreshes after the frame's existing registered events, including
 `QUEST_GREETING`, `QUEST_DETAIL`, `QUEST_PROGRESS`, `QUEST_COMPLETE`,
@@ -199,8 +219,9 @@ bookmark, once per session in both reading modes, and checks the same presentati
 ownership token. The spinner stays on while speech is generating; submission
 return and unowned playback-start events do not clear it. TTS does not depend on
 the UI.
-Closing or changing the quest window only updates button visibility; it neither
-stops narration nor hides Talking Head. The Talking Head close button hides the
+Closing or changing the quest window updates button visibility and cancels a
+pending automatic request; it neither stops active narration nor hides Talking
+Head. The Talking Head close button hides the
 presentation and spinner, then calls `OutLoud.TTS:Stop()` to cancel narration.
 
 ### Automatic QuestFrame narration
@@ -275,7 +296,6 @@ seconds formatting, default delay and persistence after reload in-game. Verify
 all three automatic page reads with zero and nonzero delays in both modes,
 NPC/player fallback, cancellation on close/page change/disable/replacement, and
 immediate manual QuestFrame and Quest Log reads without a later duplicate.
-No automated tests were added or run for the automatic-delay integration.
 
 ### Quest Log player narration
 
@@ -332,12 +352,11 @@ It forwards the existing end, playback-start, and text-progress callbacks from
 TTS cancels the previous session, so a stale callback cannot hide the new speaker.
 Both reading modes, loading, sentence fades, paged scrolling, and close/cancel
 behavior remain in their existing services. Closing the Quest Log only hides
-its button; narration can continue. No TTS/session/bookmark code was changed.
+its button; narration can continue.
 
 Button placement/visibility, player rendering and voice tokens, description-only
 audio in both modes, and replacement between QuestFrame and Quest Log narration
-require in-game verification. No new automated tests were added or run for this
-integration; the existing QuestFrame test loader includes the extracted helper.
+require in-game verification.
 
 ### Talking Head visual animations
 
@@ -347,7 +366,8 @@ the local export at
 `DevResources/BlizzardInterfaceCode/Interface/AddOns/Blizzard_FrameXML/TalkingHeadUI.xml`
 and sequencing from the adjacent `TalkingHeadUI.lua`. Out Loud does not instantiate
 Blizzard's live `TalkingHeadFrame` or attach its conversation/model mixins.
-The root retains size 570 by 155, scale 1.05, and its bottom offset of 190.
+The root retains size 570 by 155 and scale 1.05. It is centered horizontally,
+anchored to `UIParent`'s top with a Y offset of -60, on the `BACKGROUND` strata.
 Faction atlas selection and `PlayerModel:SetUnit(unit)` remain unchanged; name
 colors, text styling, and internal text anchors follow the Blizzard reference.
 
@@ -383,8 +403,8 @@ which fade the model/backdrop, portrait, background, name, text, and close butto
 from 1 to 0 over one second. The main close group's completion hides the root.
 Repeated Hide calls keep the running exit; Show stops all groups, resets alpha
 and animation transforms, replaces the NPC/text, and starts a fresh entrance.
-The template also retains the 0.25-second name/text `Fadeout` definitions, but
-Out Loud does not perform Blizzard's automatic conversation-line transitions.
+Unused name/text `Fadeout` groups have been removed; Out Loud does not perform
+Blizzard's automatic conversation-line transitions.
 Conversation timers, sound playback, and model animation kits requiring
 `C_TalkingHead` are deliberately excluded.
 
@@ -401,7 +421,7 @@ not start model gestures or animation timers. The randomized conversation
 controller, its completion callbacks, and its state have been removed.
 Blizzard-style frame animations, sentence transitions, scrolling, and loading
 remain independent and unchanged. Verify the default idle pose on NPC/player
-models in-game; no automated tests were added or run for this change.
+models in-game.
 
 ### Playback-following text viewport
 
@@ -425,15 +445,18 @@ the pending display rather than starting an obsolete transition.
 
 The existing current-session ownership callback starts UI auto-scroll, once for
 full text or for each active split sentence after its fade swaps the text.
-`AUTO_SCROLL_SPEED = 6` in `UI/TalkingHead.lua` moves the text six pixels per
-second with a native linear Translation animation. `OnUpdate` synchronizes the
-scrollbar and native scroll offset to that animation only while scrolling is active.
-The FontString anchor compensates for the native scroll offset during animation,
-so text moves through the render transform instead of stepping with layout pixels.
-Stopping commits the current fractional position back to normal scrolling. It
-stops at the bottom or when playback ends, text changes, or Talking Head hides.
-This fixed UI speed does not estimate audio duration or follow individual words;
-no word-level or intra-sentence UI bookmarks are inserted into speech.
+In `UI/TalkingHead.lua`, `INITIAL_SCROLL_DELAY = 10` waits ten seconds before the
+first page moves. `SCROLL_PAGE_FACTOR = 1.0` sets each page distance to one viewport
+height, and `SCROLL_SPEED = 18` moves it at eighteen UI pixels per second. Between
+pages, `SCROLL_PAUSE = 10` waits another ten seconds. A cancellable timer owns
+each wait; its callback checks timer identity and current display state before
+starting movement. One `OnUpdate` handler advances the native vertical scroll
+offset only while a page is moving. Scrollbar updates disable native interpolation
+so it does not introduce a second movement controller. There is no text Translation
+animation or compensating FontString-anchor movement. Motion stops at the bottom
+or when playback ends, text changes, or Talking Head hides. This fixed UI speed
+does not estimate audio duration or follow individual words; no word-level or
+intra-sentence UI bookmarks are inserted into speech.
 
 Blizzard's native `MinimalScrollBar` sits beside the clipped viewport, clear of
 the close button and spinner, and hides when text fits. Its ends are inset from
@@ -530,8 +553,9 @@ Configure the NPC's Voice Family and runtime gender voice first, then:
 8. Return to greeting/list: button hidden again.
 
 Repeat the three dialogue-page click checks in both **Split text** and
-**Read full text** Options modes. The configured voice and full Talking Head text
-should stay the same while the TTS submission mode changes. Talking Head closes
+**Read full text** Options modes. Both modes should use the same configured voice
+and speaker, while Talking Head displays full text or the current sentence
+according to the mode. Talking Head closes
 and clears its spinner after the full text or final streamed sentence finishes.
 Click again during narration to check that restarting keeps the new presentation
 visible. Closing Talking Head stops narration; calling `OutLoud.TTS:Stop()` also

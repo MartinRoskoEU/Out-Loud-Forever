@@ -5,10 +5,9 @@ text aloud with configurable voices.
 
 ## Overview
 
-The goal is automatic quest narration that chooses a character's voice from the
-speaking NPC's visual model family and runtime gender. A Blizzard-style Talking
-Head presentation is intended to show the speaker and dialogue while speech is
-generated and played.
+Out Loud chooses an NPC's configured voice from its visual model family and
+runtime gender. A Blizzard-style Talking Head shows the speaker and dialogue
+while speech is generated and played.
 
 Manual Out Loud buttons connect current quest dialogue to the NPC's voice, or
 selected Quest Log descriptions to the player's voice, Talking Head, and speech.
@@ -99,8 +98,8 @@ The mappings, saved voice configuration, voice resolver, Talking Head UI, TTS
 controller, manual QuestFrame and Quest Log narration, and optional automatic
 QuestFrame narration are implemented.
 The dialogue text APIs and NPC voice resolver have been verified in-game by the
-user. The combined
-button, Talking Head, and speech flow still requires verification in WoW: Forever.
+user. The combined button, Talking Head, and speech flow still requires
+verification in WoW: Forever.
 
 ## Architecture
 

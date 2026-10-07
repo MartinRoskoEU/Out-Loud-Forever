@@ -19,18 +19,10 @@ local function NormalizeAutoNarrationDelay(value)
     return math.floor(value / range.STEP + 0.5) * range.STEP
 end
 
--- Snapshot of the numeric keys used by the original SavedVariables schema.
--- Available Options families always come from the generated data instead.
-local LegacyFamilies = {
-    [1] = "HUMAN",
-    [2] = "ORC",
-    [3] = "DWARF",
-    [4] = "NIGHT_ELF",
-    [5] = "UNDEAD",
-    [6] = "TAUREN",
-    [7] = "GNOME",
-    [8] = "TROLL",
-}
+local function NormalizeReadingMode(mode)
+    local modes = OutLoud.TTS.ReadingModes
+    return mode == modes.SPLIT and modes.SPLIT or modes.FULL
+end
 
 function Database:Initialize()
     if self.Initialized then
@@ -51,31 +43,8 @@ function Database:Initialize()
     if db.autoNarrateQuests == nil then
         db.autoNarrateQuests = false
     end
+    db.readingMode = NormalizeReadingMode(db.readingMode)
     db.autoNarrationDelay = NormalizeAutoNarrationDelay(db.autoNarrationDelay)
-
-    if db.voiceSettingsVersion == nil then
-        for raceID, family in pairs(LegacyFamilies) do
-            local legacyVoices = db.voices[raceID]
-
-            if type(legacyVoices) == "table" then
-                local familyVoices = db.voices[family]
-
-                if type(familyVoices) ~= "table" then
-                    familyVoices = {}
-                    db.voices[family] = familyVoices
-                end
-
-                for _, gender in pairs(OutLoud.VoiceSelection.Genders) do
-                    if familyVoices[gender] == nil then
-                        familyVoices[gender] = legacyVoices[gender]
-                    end
-                end
-            end
-        end
-
-        -- Retain numeric entries as a backup, but never reimport cleared voices.
-        db.voiceSettingsVersion = 2
-    end
 
     self.DB = db
     OutLoud.DB = db
@@ -86,7 +55,7 @@ end
 function Database:GetVoice(family, gender)
     local familyVoices = self.DB.voices[family]
 
-    if not familyVoices then
+    if type(familyVoices) ~= "table" then
         return nil
     end
 
@@ -96,7 +65,7 @@ end
 function Database:SetVoice(family, gender, voiceID)
     local voices = self.DB.voices
 
-    if not voices[family] then
+    if type(voices[family]) ~= "table" then
         voices[family] = {}
     end
 
@@ -104,11 +73,11 @@ function Database:SetVoice(family, gender, voiceID)
 end
 
 function Database:GetReadingMode()
-    return self.DB.readingMode or OutLoud.TTS.ReadingModes.FULL
+    return NormalizeReadingMode(self.DB.readingMode)
 end
 
 function Database:SetReadingMode(mode)
-    self.DB.readingMode = mode
+    self.DB.readingMode = NormalizeReadingMode(mode)
 end
 
 function Database:GetAutoNarrateQuests()

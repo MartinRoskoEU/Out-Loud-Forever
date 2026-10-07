@@ -366,13 +366,24 @@ Test("Untracked events during submission cannot claim our session", function()
     Equal(test.stops, 0)
 end)
 
-Test("Native exceptions clear failed submissions", function()
+Test("Native exceptions clear failed submissions and release stop guards", function()
     local test = Harness()
     test.onSpeak = function() error("Engine rejected the request") end
     local accepted, reason = test.tts:SpeakStreaming(text, 7)
     Equal(accepted, false)
     Equal(reason, "speech-failed")
     Equal(test.tts.CurrentSession, nil)
+
+    test.onSpeak = nil
+    local ended = 0
+    test.tts:SpeakWholeText(text, 7, function() ended = ended + 1 end)
+    test.onStop = function() error("Engine stop failed") end
+    Equal(test.tts:Stop(), true)
+    Equal(test.tts.Stopping, false, "A native stop exception cannot block future events")
+    Equal(ended, 1, "Presentation cleanup still runs when the native stop fails")
+    test.tts:SpeakWholeText(text, 7)
+    test:Bookmark(#test.calls, 101)
+    assert(test.tts.CurrentSession.playbackStarted, "Owned playback remains usable after a stop error")
 end)
 
 Test("An identified intermediate failure cancels prefetched audio", function()

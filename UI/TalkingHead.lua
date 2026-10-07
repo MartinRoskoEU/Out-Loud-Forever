@@ -11,6 +11,11 @@ local MANUAL_SCROLL_STEP = 24
 local TEXT_TOP_OFFSET = 6 -- Space between the speaker name and the text viewport's top.
 local TEXT_BOTTOM_OFFSET = 24 -- Space between the text viewport and the frame's bottom.
 
+local function CanAutoScroll(self)
+    return self.PlaybackActive and not self.ManualScrollPaused and not self.PendingSentence
+        and not self.IsClosing and self.Frame:IsShown()
+end
+
 local function AtlasOrFallback(primary, fallback)
     if C_Texture.GetAtlasExists(primary) then
         return primary
@@ -46,7 +51,7 @@ function TalkingHead:Initialize()
     local viewport = textFrame.Scroll
     viewport:SetPoint("TOPLEFT", frame.NameFrame.Name, "BOTTOMLEFT", 0, -TEXT_TOP_OFFSET)
     viewport:SetPoint("BOTTOMRIGHT", textFrame, "BOTTOMRIGHT", -64, TEXT_BOTTOM_OFFSET)
-    textFrame.Text = viewport.Content.Text
+    local dialogText = viewport.Content.Text
     viewport:SetClipsChildren(true)
     viewport:EnableMouseWheel(true)
 
@@ -71,8 +76,8 @@ function TalkingHead:Initialize()
     local name = frame.NameFrame.Name
     name:SetPoint("TOPLEFT", frame.PortraitFrame.Portrait, "TOPRIGHT", 2, -19)
     name:SetShadowColor(0, 0, 0, 0)
-    frame.TextFrame.Text:SetTextColor(0, 0, 0, 1)
-    frame.TextFrame.Text:SetShadowColor(0, 0, 0, 0)
+    dialogText:SetTextColor(0, 0, 0, 1)
+    dialogText:SetShadowColor(0, 0, 0, 0)
 
     main.CloseButton:SetScript("OnClick", function()
         self:Hide()
@@ -90,7 +95,7 @@ function TalkingHead:Initialize()
     self.PortraitBackground = main.Model.PortraitBg
     self.PortraitFrame = frame.PortraitFrame.Portrait
     self.NameText = name
-    self.DialogText = frame.TextFrame.Text
+    self.DialogText = dialogText
     self.TextViewport = viewport
     self.TextContent = viewport.Content
     self.TextScrollBar = scrollBar
@@ -114,8 +119,6 @@ function TalkingHead:Initialize()
     for _, group in ipairs(self.CloseGroups) do
         self.AnimationGroups[#self.AnimationGroups + 1] = group
     end
-    self.AnimationGroups[#self.AnimationGroups + 1] = frame.NameFrame.Fadeout
-    self.AnimationGroups[#self.AnimationGroups + 1] = frame.TextFrame.Fadeout
     self.AnimationGroups[#self.AnimationGroups + 1] = textFrame.SentenceOut
     self.AnimationGroups[#self.AnimationGroups + 1] = textFrame.SentenceIn
 
@@ -179,7 +182,6 @@ function TalkingHead:Initialize()
         if self.IsClosing then
             self.IsClosing = false
             frame:Hide()
-            self:StopTextFlow(true)
         end
     end)
 
@@ -256,10 +258,10 @@ function TalkingHead:Show(unit, text)
     end
 
     self.NameText:SetText(UnitName(unit) or "Unknown")
-    self.ReadingMode = OutLoud.Database:GetReadingMode()
-    self.DisplayChunk = self.ReadingMode == "split" and 1 or 0
+    local readingMode = OutLoud.Database:GetReadingMode()
+    self.DisplayChunk = readingMode == OutLoud.TTS.ReadingModes.SPLIT and 1 or 0
     local displayed = text or ""
-    if self.ReadingMode == "split" then
+    if readingMode == OutLoud.TTS.ReadingModes.SPLIT then
         displayed = OutLoud.TTS:SplitSentences(displayed)[1] or ""
     end
     self:SetDisplayedText(displayed)
@@ -367,8 +369,7 @@ function TalkingHead:StartAutoScroll(delay)
     self:StopAutoScroll()
     local viewport = self.TextViewport
     local start = self.ScrollPosition or viewport:GetVerticalScroll()
-    if not self.PlaybackActive or self.ManualScrollPaused or self.PendingSentence
-        or self.IsClosing or not self.Frame:IsShown()
+    if not CanAutoScroll(self)
         or start >= (self.ScrollMax or 0) or viewport:GetHeight() <= 0 then
         return
     end
@@ -379,8 +380,7 @@ function TalkingHead:StartAutoScroll(delay)
         if self.AutoScrollDelayTimer ~= delayTimer then return end
         self.AutoScrollDelayTimer = nil
         local position = self.ScrollPosition or viewport:GetVerticalScroll()
-        if not self.PlaybackActive or self.ManualScrollPaused or self.PendingSentence
-            or self.IsClosing or not self.Frame:IsShown()
+        if not CanAutoScroll(self)
             or position >= (self.ScrollMax or 0) then
             return
         end
@@ -392,8 +392,7 @@ function TalkingHead:StartAutoScroll(delay)
         self.AutoScrolling = true
         viewport:SetScript("OnUpdate", function(_, elapsed)
             if not self.AutoScrolling then return end
-            if not self.PlaybackActive or self.ManualScrollPaused or self.PendingSentence
-                or self.IsClosing or not self.Frame:IsShown() then
+            if not CanAutoScroll(self) then
                 self:StopAutoScroll()
                 return
             end

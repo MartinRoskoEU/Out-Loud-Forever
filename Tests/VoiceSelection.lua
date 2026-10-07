@@ -13,12 +13,23 @@ local function Equal(actual, expected, message)
 end
 
 local function Frame(parent)
-    local frame = { scripts = {}, points = {}, parent = parent, shown = true,
-        heightValue = 0, widthValue = 800, scrollValue = 0, minimum = 0, maximum = 0 }
+    local frame = { scripts = {}, points = {}, callbacks = {}, parent = parent, shown = true,
+        heightValue = 0, widthValue = 800, scrollValue = 0 }
     local methods = {
         SetScript = function(self, event, callback) self.scripts[event] = callback end,
+        HookScript = function(self, event, callback)
+            local previous = self.scripts[event]
+            self.scripts[event] = function(...)
+                if previous then previous(...) end
+                callback(...)
+            end
+        end,
+        RegisterCallback = function(self, event, callback, owner)
+            self.callbacks[event] = function(...) callback(owner, ...) end
+        end,
         GetScript = function(self, event) return self.scripts[event] end,
         SetText = function(self, text) self.textValue = text end,
+        GetStringWidth = function(self) return #(self.textValue or "") * 8 end,
         SetWidth = function(self, width) self.widthValue = width end,
         GetWidth = function(self) return self.widthValue end,
         SetHeight = function(self, height)
@@ -52,14 +63,10 @@ local function Frame(parent)
         IsShown = function(self) return self.shown end,
         SetScrollChild = function(self, child) self.scrollChild = child end,
         GetVerticalScroll = function(self) return self.scrollValue end,
-        SetVerticalScroll = function(self, value) self.scrollValue = value end,
-        SetMinMaxValues = function(self, minimum, maximum) self.minimum, self.maximum = minimum, maximum end,
-        GetMinMaxValues = function(self) return self.minimum, self.maximum end,
-        GetValue = function(self) return self.scrollValue end,
-        SetValue = function(self, value)
-            self.scrollValue = math.max(self.minimum, math.min(self.maximum, value))
-            if self.scripts.OnValueChanged then self.scripts.OnValueChanged(self, self.scrollValue) end
+        GetVerticalScrollRange = function(self)
+            return math.max(0, self.scrollChild:GetHeight() - self:GetHeight())
         end,
+        SetVerticalScroll = function(self, value) self.scrollValue = value end,
         CreateFontString = function(self)
             local font = Frame(self)
             font:SetHeight(32) -- Simulated text height, not proof of real font wrapping.
@@ -69,7 +76,8 @@ local function Frame(parent)
         SetupMenu = function(self, callback) self.menu = callback end,
     }
     setmetatable(frame, { __index = function(self, key)
-        if key == "Title" or key == "Label" or key == "Dropdown" or key == "text" or key == "ScrollBar" then
+        if key == "Title" or key == "Label" or key == "Dropdown" or key == "text"
+            or key == "HoverBackground" then
             local child = Frame(self)
             rawset(self, key, child)
             return child
@@ -83,17 +91,40 @@ local frames = {}
 function environment.CreateFrame(kind, _name, parent, template)
     local frame = Frame(parent)
     if template == "SettingsListSectionHeaderTemplate" then frame:SetHeight(20) end
-    if template == "UIRadioButtonTemplate" then frame:SetHeight(16) end
+    if template == "UIRadioButtonTemplate" then frame:SetSize(16, 16) end
+    if template == "SettingsCheckboxTemplate" then
+        for _, name in ipairs({ "Normal", "Pushed", "Checked", "DisabledChecked" }) do
+            local texture = Frame(frame)
+            frame["Get" .. name .. "Texture"] = function() return texture end
+        end
+        function frame:Init(value) self.value = value end
+        function frame:SetValue(value) self.value = value end
+    elseif template == "MinimalSliderWithSteppersTemplate" then
+        frame:SetSize(250, 40)
+        frame.Label = { Right = 2 }
+        frame.Event = { OnValueChanged = "OnValueChanged" }
+        function frame:Init(value, minimum, maximum, steps, formatters)
+            self.value, self.minimum, self.maximum = value, minimum, maximum
+            self.step, self.formatters = (maximum - minimum) / steps, formatters
+        end
+        function frame:SetValue(value)
+            self.value = value
+            if self.callbacks.OnValueChanged then self.callbacks.OnValueChanged(value) end
+        end
+        function frame:SetEnabled(enabled) self.enabled = enabled end
+    elseif template == "MinimalScrollBar" then
+        function frame:SetScrollPercentage(value)
+            self.percentage = math.max(0, math.min(1, value))
+            if self.callbacks.OnScroll then self.callbacks.OnScroll(self.percentage) end
+        end
+        function frame:SetVisibleExtentPercentage(value) self.shown = value < 1 end
+        function frame:SetPanExtentPercentage(value) self.pan = value end
+        function frame:ScrollStepInDirection(direction)
+            self:SetScrollPercentage(self.percentage + direction * self.pan)
+        end
+    end
     if kind == "ScrollFrame" then
         frame:SetSize(760, 420)
-        -- Simulate only the template's range/value connection needed by these checks.
-        frame.ScrollBar:SetScript("OnValueChanged", function(_, value) frame:SetVerticalScroll(value) end)
-        frame:SetScript("OnScrollRangeChanged", function(_, _xrange, yrange)
-            local bar = frame.ScrollBar
-            bar:SetMinMaxValues(0, math.floor(yrange))
-            bar:SetValue(bar:GetValue())
-            if yrange > 0 then bar:Show() else bar:Hide() end
-        end)
     end
     table.insert(frames, frame)
     return frame
@@ -107,6 +138,8 @@ environment.Settings = {
     RegisterCanvasLayoutCategory = function(_panel, _name) return {} end,
     RegisterAddOnCategory = function(_category) end,
 }
+environment.SettingsCheckboxMixin = { Event = { OnValueChanged = "OnValueChanged" } }
+environment.ScrollBoxConstants = { NoScrollInterpolation = true }
 environment.C_VoiceChat = { GetTtsVoices = function()
     local voices = {}
     for id = 0, 60 do
@@ -126,6 +159,10 @@ end
 for line in FileIO.lines("OutLoud.toc") do
     if line:match("%.lua$") then
         Load((line:gsub("\\", "/")))
+        if line == "UI\\TalkingHead.lua" then
+            -- XML rendering cannot be reproduced here; the real Settings controls are exercised.
+            addon.UI.TalkingHead.Initialize = function() end
+        end
     end
 end
 
@@ -148,11 +185,9 @@ end
 
 local savedVariables = {
     voices = {
-        [5] = { [2] = 40, [3] = 41 },
-        UNDEAD = { [2] = 50 },
+        UNDEAD = { [2] = 50, [3] = 41 },
         SKYBORNE = { [2] = 10, [3] = 11 },
         HUMAN = { [2] = 0, [3] = 13 },
-        [999] = { [2] = 60 },
     },
     readingMode = "split",
 }
@@ -172,12 +207,21 @@ Equal(settingsPage.FullTextButton.parent, settingsPage.Content, "Reading control
 Equal(settingsPage.ScrollFrame.points.BOTTOMRIGHT.x, -32, "Scrollbar gutter reserved")
 assert(settingsPage.Content:GetHeight() > settingsPage.ScrollFrame:GetHeight(), "Dynamic rows exceed viewport")
 Equal(settingsPage.ScrollFrame:GetVerticalScroll(), 0, "Initial scroll at top")
-Equal(addon.Database:GetVoice("UNDEAD", 2), 50, "Keep newer assignment")
-Equal(addon.Database:GetVoice("UNDEAD", 3), 41, "Migrate legacy female")
-Equal(savedVariables.voices[5][2], 40, "Keep numeric backup")
-Equal(savedVariables.voices[999][2], 60, "Keep unknown legacy keys")
+Equal(addon.Database:GetVoice("UNDEAD", 2), 50, "Keep saved male assignment")
+Equal(addon.Database:GetVoice("UNDEAD", 3), 41, "Keep saved female assignment")
 Equal(addon.Database:GetReadingMode(), "split", "Keep reading settings")
-Equal(savedVariables.voiceSettingsVersion, 2, "Migration marker")
+Equal(initFrame.scripts.OnEvent, nil, "Release initialization callback after loading")
+Equal(addon.Database:GetAutoNarrationDelay(), 2, "Automatic delay default")
+Equal(settingsPage.AutoNarrationDelaySlider.enabled, false, "Delay control disabled by default")
+addon.Database:SetReadingMode("invalid")
+Equal(addon.Database:GetReadingMode(), "full", "Invalid reading mode uses the existing full default")
+addon.Database:SetReadingMode("split")
+local humanVoices = savedVariables.voices.HUMAN
+savedVariables.voices.HUMAN = false
+Equal(addon.Database:GetVoice("HUMAN", 2), nil, "Malformed family settings are unresolved")
+addon.Database:SetVoice("HUMAN", 2, 0)
+Equal(addon.Database:GetVoice("HUMAN", 2), 0, "A selector can repair malformed family settings")
+savedVariables.voices.HUMAN = humanVoices
 
 local modelID = 959310
 local model = { GetModelFileID = function() return modelID end }
@@ -282,7 +326,7 @@ Equal(addon.Database:GetVoice("UNDEAD", 2), 50, "Callbacks do not capture anothe
 addon.Database:SetVoice("UNDEAD", 3, nil)
 addon.Database.Initialized = false
 addon.Database:Initialize()
-Equal(addon.Database:GetVoice("UNDEAD", 3), nil, "Reload does not resurrect cleared legacy voice")
+Equal(addon.Database:GetVoice("UNDEAD", 3), nil, "Cleared voice remains unset after reinitialization")
 Unresolved(959310, 3, "voice-not-set")
 
 -- Empty exports still anchor the Reading section safely.
@@ -301,8 +345,7 @@ local function RebuildFamilies(count)
 end
 RebuildFamilies(30)
 Equal(settingsPage.Content:GetHeight(), emptyHeight + 30 * 36, "Every family adds its row height and gap")
-local minimum, maximum = settingsPage.ScrollBar:GetMinMaxValues()
-Equal(minimum, 0, "Range begins at zero")
+local maximum = settingsPage.ScrollFrame:GetVerticalScrollRange()
 Equal(maximum, settingsPage.Content:GetHeight() - settingsPage.ScrollFrame:GetHeight(), "Range follows content")
 Equal(settingsPage.ScrollBar:IsShown(), true, "Overflow shows native scrollbar")
 local wheel = settingsPage.ScrollFrame.scripts.OnMouseWheel
@@ -330,9 +373,10 @@ Equal(addon.Database:GetReadingMode(), "split", "Split selector works while scro
 settingsPage:SetScrollPosition(10000)
 RebuildFamilies(0)
 Equal(settingsPage.Content:GetHeight(), emptyHeight, "Shorter rebuild updates content height")
-Equal(settingsPage.ScrollFrame:GetVerticalScroll(), 0, "Shorter content clamps old position")
-Equal(select(2, settingsPage.ScrollBar:GetMinMaxValues()), 0, "No negative range when content fits")
-Equal(settingsPage.ScrollBar:IsShown(), false, "Scrollbar hidden when content fits")
+local shortRange = math.max(0, emptyHeight - settingsPage.ScrollFrame:GetHeight())
+Equal(settingsPage.ScrollFrame:GetVerticalScroll(), shortRange, "Shorter content clamps old position")
+Equal(settingsPage.ScrollFrame:GetVerticalScrollRange(), shortRange, "Range follows all Narration controls")
+Equal(settingsPage.ScrollBar:IsShown(), shortRange > 0, "Scrollbar follows remaining overflow")
 RebuildFamilies(30)
 settingsPage:SetScrollPosition(10000)
 settingsPage.ScrollFrame:SetHeight(settingsPage.Content:GetHeight() + 100)
@@ -350,4 +394,4 @@ settingsPage.ScrollFrame:SetWidth(760)
 settingsPage:UpdateScrollLayout()
 Equal(settingsPage.VoiceRows[1].MaleComboBox.Frame:GetWidth(), 250, "Existing sizing restored when it fits")
 
-print("PASS: classification, Options selectors and scrolling, TOC load order, and SavedVariables migration")
+print("PASS: classification, Options selectors and scrolling, TOC load order, and saved settings")

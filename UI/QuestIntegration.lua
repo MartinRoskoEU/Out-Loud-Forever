@@ -146,7 +146,6 @@ function QuestIntegration:ScheduleAutoNarration(event)
 end
 
 function QuestIntegration:StartCurrentNarration()
-    self:CancelPendingAutoNarration()
     local ok, message = pcall(self.SpeakCurrentText, self)
     if not ok then
         OutLoud:Error("Read failed with Lua error:", tostring(message))
@@ -156,7 +155,7 @@ end
 function QuestIntegration:SpeakCurrentText()
     self:CancelPendingAutoNarration()
     OutLoud:Debug("Quest narration requested.")
-    -- Re-read the panel and text on every click; do not retain quest event state.
+    -- Re-read at narration start; the automatic timer's snapshot is only a guard.
     local text, textReason, textSource = self:GetCurrentText()
     if not text then
         OutLoud:Error("Read stopped:", textReason)

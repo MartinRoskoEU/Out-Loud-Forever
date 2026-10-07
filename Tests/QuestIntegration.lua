@@ -30,6 +30,7 @@ local function Frame(parent)
         self:Fire("OnHide")
     end
     function frame:SetSize(width, height) self.size = { width, height } end
+    function frame:ClearAllPoints() self.point = nil end
     function frame:SetPoint(...) self.point = { ... } end
     function frame:SetText(text) self.text = text end
     function frame:RegisterEvent(event) self.events[event] = true end
@@ -44,7 +45,7 @@ local panelNames = {
 
 local function Harness(deferred, realTTS)
     local h = { created = {}, speech = {}, heads = {}, flow = {}, diagnostics = {}, exists = true, sex = 2, modelID = 100,
-        nativeCalls = {}, stops = 0,
+        nativeCalls = {}, stops = 0, timers = {}, playerExists = true, playerSex = 2, questID = 1,
         texts = { detail = "Offer text.\n Objectives elsewhere.",
             progress = "Progress text!", reward = "Reward text?" }, resolveCalls = 0 }
     local environment = setmetatable({}, { __index = _G })
@@ -71,11 +72,24 @@ local function Harness(deferred, realTTS)
         return frame
     end
     function environment.UnitExists(unit)
-        Equal(unit, "questnpc", "Check the speaking NPC")
-        return h.exists
+        return unit == "player" and h.playerExists or unit == "questnpc" and h.exists
     end
-    function environment.UnitSex() return h.sex end
-    function environment.UnitName() return "Quest NPC" end
+    function environment.UnitSex(unit)
+        if unit == "player" then return h.playerSex end
+        return h.sex
+    end
+    function environment.UnitName(unit) return unit == "player" and "Test Player" or "Quest NPC" end
+    function environment.UnitRace() return "Human", "Human", 1 end
+    function environment.GetQuestID() return h.questID end
+    -- Keep the table-form mock separate from the editor's global API overloads.
+    rawset(environment, "hooksecurefunc", function(owner, method, callback)
+        local original = assert(owner[method])
+        owner[method] = function(...)
+            local result = { original(...) }
+            callback(...)
+            return unpack(result)
+        end
+    end)
     function environment.GetQuestText() return h.texts.detail end
     function environment.GetProgressText() return h.texts.progress end
     function environment.GetRewardText() return h.texts.reward end
@@ -84,7 +98,17 @@ local function Harness(deferred, realTTS)
     function environment.print(...)
         h.diagnostics[#h.diagnostics + 1] = { ... }
     end
-    environment.C_Timer = { After = function() error("No production delays") end }
+    environment.C_Timer = {
+        After = function() error("Narration delays must be cancellable") end,
+        NewTimer = function(delay, callback)
+            local timer = { delay = delay }
+            function timer:Cancel() self.cancelled = true end
+            -- Allow firing cancelled callbacks to exercise request ownership guards.
+            function timer:Fire() callback() end
+            h.timers[#h.timers + 1] = timer
+            return timer
+        end,
+    }
 
     local addon = {}
     local function Load(path)
@@ -93,12 +117,11 @@ local function Harness(deferred, realTTS)
         chunk("OutLoud", addon)
     end
     Load("Core/Namespace.lua")
-    addon.VoiceMappings = { Families = { HUMAN = "HUMAN" }, Models = { [100] = "HUMAN" } }
+    addon.VoiceMappings = {
+        Families = { HUMAN = "HUMAN", UNDEAD = "UNDEAD" }, Models = { [100] = "UNDEAD" },
+    }
     Load("Core/VoiceSelection.lua")
     Load("Core/Database.lua")
-    addon.Database:Initialize()
-    addon.Database:SetVoice("HUMAN", 2, 0)
-    addon.Database:SetVoice("HUMAN", 3, 7)
     local resolve = addon.VoiceSelection.Resolve
     function addon.VoiceSelection:Resolve(unit, model)
         h.resolveCalls = h.resolveCalls + 1
@@ -120,6 +143,7 @@ local function Harness(deferred, realTTS)
             self.shown, self.loading = false, false
             h.flow[#h.flow + 1] = "hide"
         end,
+        FinishTextPlayback = function(_, reason) h.endReason = reason end,
     }
     local speak
     if realTTS then
@@ -137,13 +161,18 @@ local function Harness(deferred, realTTS)
         Load("Core/TTS.lua")
         speak = addon.TTS.Speak
     else
-        addon.TTS = { ReadingModes = { FULL = "full", SPLIT = "split" } }
+        addon.TTS = { ReadingModes = { FULL = "full", SPLIT = "split" }, StartSession = function() end }
         speak = function() return true end
     end
-    function addon.TTS:Speak(text, voiceID, onSessionEnded)
+    addon.Database:Initialize()
+    addon.Database:SetVoice("HUMAN", 2, 0)
+    addon.Database:SetVoice("HUMAN", 3, 7)
+    addon.Database:SetVoice("UNDEAD", 2, 0)
+    addon.Database:SetVoice("UNDEAD", 3, 7)
+    function addon.TTS:Speak(text, voiceID, onSessionEnded, onPlaybackStarted, onTextProgress)
         table.insert(h.speech, { text = text, voiceID = voiceID })
         h.flow[#h.flow + 1] = "speak"
-        return speak(self, text, voiceID, onSessionEnded)
+        return speak(self, text, voiceID, onSessionEnded, onPlaybackStarted, onTextProgress)
     end
     Load("Core/Narration.lua")
     Load("UI/QuestIntegration.lua")
@@ -153,6 +182,14 @@ local function Harness(deferred, realTTS)
         environment.QuestFrame = Frame()
         for _, name in ipairs(panelNames) do
             environment[name] = Frame(environment.QuestFrame)
+        end
+        for _, name in ipairs({
+            "QuestFrameAcceptButton", "QuestFrameDeclineButton",
+            "QuestFrameCompleteButton", "QuestFrameGoodbyeButton",
+            "QuestFrameCompleteQuestButton", "QuestFrameCancelButton",
+        }) do
+            environment[name] = Frame(environment.QuestFrame)
+            environment[name].shown = true
         end
     end
     function h:Panel(name)
@@ -177,13 +214,13 @@ end
 Test("Create once and preserve Blizzard handlers", function()
     local h = Harness()
     local button, model = h.integration.Button, h.integration.Model
-    Equal(#h.created, 2, "One button and one model")
+    Equal(#h.created, 3, "One button, its gap anchor, and one model")
     Equal(button.parent, h.environment.QuestFrame, "QuestFrame parent")
     Equal(button.template, "UIPanelButtonTemplate", "Native button template")
     Equal(button.text, "Out Loud", "Button caption")
     Equal(model.parent, nil, "Inspection model uses the verified unparented setup")
     h.integration:Initialize()
-    Equal(#h.created, 2, "Repeated initialization creates nothing")
+    Equal(#h.created, 3, "Repeated initialization creates nothing")
     local originalCalls = 0
     h.environment.QuestFrame:SetScript("OnShow", function() originalCalls = originalCalls + 1 end)
     h:Panel("QuestFrameDetailPanel")
@@ -239,7 +276,7 @@ Test("Click uses each panel's current text unchanged and real resolver", functio
     Equal(h.speech[4].text, h.texts.reward, "Read fresh text on repeated click")
     Equal(h.speech[4].voiceID, 7, "Runtime female voice")
     Equal(h.heads[4].text, h.texts.reward, "Repeated click updates Talking Head")
-    Equal(#h.created, 2, "Clicks reuse the same model")
+    Equal(#h.created, 3, "Clicks reuse the same model")
     Equal(h.integration.Model.clearCalls, 4, "Old model cleared on each load")
     Equal(h.resolveCalls, 4, "Existing VoiceSelection called")
 end)
@@ -271,6 +308,47 @@ Test("After-event refresh handles unchanged panel and Blizzard transitions", fun
     Equal(h.integration.Button:IsShown(), false, "Finished event")
     Equal(#h.speech, 0, "Events only refresh visibility")
     Equal(#h.heads, 0, "Events do not open Talking Head")
+
+    h.addon.Database:SetAutoNarrateQuests(true)
+    environment.QuestFrame:Fire("OnEvent", "QUEST_DETAIL")
+    local timer = h.timers[#h.timers]
+    Equal(timer.delay, 2, "Automatic delay defaults to two seconds")
+    Equal(#h.speech, 0, "Automatic narration waits")
+    h:Click()
+    Equal(timer.cancelled, true, "Manual click cancels pending automatic narration")
+    Equal(#h.speech, 1, "Manual click starts immediately")
+    timer:Fire()
+    Equal(#h.speech, 1, "Cancelled callback cannot duplicate manual narration")
+
+    environment.QuestFrame:Fire("OnEvent", "QUEST_PROGRESS")
+    timer = h.timers[#h.timers]
+    environment.QuestFrame:Hide()
+    Equal(timer.cancelled, true, "Closing cancels the pending request")
+    timer:Fire()
+    Equal(#h.speech, 1, "Closed request cannot start narration")
+
+    environment.QuestFrame:Fire("OnEvent", "QUEST_DETAIL")
+    timer = h.timers[#h.timers]
+    environment.QuestFrame:Fire("OnEvent", "QUEST_PROGRESS")
+    Equal(timer.cancelled, true, "A new automatic event replaces the pending timer")
+    timer:Fire()
+    Equal(#h.speech, 1, "Replaced callbacks cannot narrate an old page")
+    timer = h.timers[#h.timers]
+    h.questID = 2
+    timer:Fire()
+    Equal(#h.speech, 1, "Changed quest identity invalidates a delayed callback")
+
+    environment.QuestFrame:Fire("OnEvent", "QUEST_DETAIL")
+    timer = h.timers[#h.timers]
+    h.addon.Database:SetAutoNarrateQuests(false)
+    Equal(timer.cancelled, true, "Disabling automatic narration cancels the timer immediately")
+    timer:Fire()
+    Equal(#h.speech, 1, "Disabled callbacks cannot narrate")
+
+    h.addon.Database:SetAutoNarrateQuests(true)
+    h.addon.Database:SetAutoNarrationDelay(0)
+    environment.QuestFrame:Fire("OnEvent", "QUEST_COMPLETE")
+    Equal(#h.speech, 2, "Zero delay starts automatically without a timer")
 end)
 
 Test("Empty, missing, and ambiguous dialogue fails safely", function()
@@ -301,16 +379,17 @@ Test("Empty, missing, and ambiguous dialogue fails safely", function()
     Equal(#h.heads, 0, "Invalid text does not show Talking Head")
 end)
 
-Test("Missing NPC, unloaded or unknown model, unknown gender and unset voice", function()
+Test("NPC failures use the player; failed player resolution does not start speech", function()
     local h = Harness()
     h.environment.QuestFrame:Show()
     h:Panel("QuestFrameDetailPanel")
     h.exists = false
     h:Click()
     Equal(h.resolveCalls, 0, "Missing NPC skips model/resolve")
+    Equal(h.heads[#h.heads].unit, "player", "Missing NPC uses the player presentation")
     h.exists = true
     h:Click()
-    Equal(#h.speech, 1, "Baseline narration")
+    Equal(#h.speech, 2, "Baseline NPC narration after player fallback")
     h.modelID = 0
     h:Click()
     Equal(h.integration.Model:GetModelFileID(), 0, "No stale previous model")
@@ -323,12 +402,17 @@ Test("Missing NPC, unloaded or unknown model, unknown gender and unset voice", f
     h.sex = nil
     h:Click()
     h.sex = 2
-    h.addon.Database:SetVoice("HUMAN", 2, nil)
+    h.addon.Database:SetVoice("UNDEAD", 2, nil)
     h:Click()
     h.integration.Model = nil
     h:Click()
-    Equal(#h.speech, 1, "Unresolved inputs never use a fallback voice")
-    Equal(#h.heads, 1, "Unresolved inputs leave the previous presentation alone")
+    Equal(#h.speech, 11, "Every unresolved NPC uses the configured player voice")
+    Equal(h.heads[#h.heads].unit, "player", "Fallback uses the player model/name")
+    local count = #h.speech
+    h.playerExists = false
+    h:Click()
+    Equal(#h.speech, count, "Unavailable player cannot start narration")
+    Equal(#h.heads, count, "Failed player resolution leaves presentation alone")
 end)
 
 Test("Real TTS dispatcher honors reading modes and owns replacement", function()
@@ -351,7 +435,17 @@ Test("Real TTS dispatcher honors reading modes and owns replacement", function()
     h.environment.QuestFrame:Hide()
     Equal(h.stops, 1, "QuestFrame close does not stop narration")
     Equal(h.addon.UI.TalkingHead.shown, true, "QuestFrame close leaves presentation visible")
-    Equal(h.addon.UI.TalkingHead.loading, true, "Loading remains until narration ends")
+    Equal(h.addon.UI.TalkingHead.loading, true, "Loading remains until the first owned bookmark")
+
+    h.environment.QuestFrame:Show()
+    h.addon.Database:SetAutoNarrateQuests(true)
+    h.environment.QuestFrame:Fire("OnEvent", "QUEST_DETAIL")
+    local timer = h.timers[#h.timers]
+    tts:SpeakWholeText("Another caller starts a session.", 7)
+    Equal(timer.cancelled, true, "A new TTS session cancels pending automatic narration")
+    local count = #h.nativeCalls
+    timer:Fire()
+    Equal(#h.nativeCalls, count, "Replaced automatic request cannot interrupt another caller")
 end)
 
 Test("Talking Head closes on owned completion in both reading modes", function()
@@ -446,7 +540,7 @@ Test("Deferred Blizzard UI installs once after its globals exist", function()
     Equal(loadFrame.events.ADDON_LOADED, nil, "Stop observing after setup")
     Equal(loadFrame.scripts.OnEvent, nil, "Release observer callback")
     h.integration:Initialize()
-    Equal(#h.created, 3, "Observer, button, model created only once")
+    Equal(#h.created, 4, "Observer, button, gap anchor, and model created only once")
     Equal(#h.environment.QuestFrame.hooks.OnEvent, 1, "One event hook")
 end)
 
