@@ -41,12 +41,57 @@ local function StopPlayback(self)
     self.Stopping = false
 end
 
+local function NotifySessionEnded(session, reason)
+    if type(session.onSessionEnded) == "function" then
+        local ok, message = pcall(session.onSessionEnded, reason, session.id)
+        if not ok then
+            OutLoud:Error("TTS session-end callback failed:", tostring(message))
+        end
+    end
+end
+
+local function NotifyPlaybackStarted(session)
+    if session.playbackStarted then
+        return
+    end
+
+    session.playbackStarted = true
+    if type(session.onPlaybackStarted) == "function" then
+        pcall(session.onPlaybackStarted, session.id)
+    end
+end
+
+local function NotifyTextProgress(self, session, token, offset)
+    if self.CurrentSession ~= session or type(session.onTextProgress) ~= "function" then
+        return
+    end
+    local text = token == "WHOLE" and session.text or session.sentences[token]
+    local ok, message = pcall(session.onTextProgress, text,
+        token == "WHOLE" and 0 or token, offset, session.id)
+    if not ok then
+        OutLoud:Error("TTS text-progress callback failed:", tostring(message))
+    end
+end
+
+function TTS:SplitSentences(text)
+    local sentences = {}
+    text = text:gsub("%s+", " ")
+    for sentence in text:gmatch("[^.!?]+[.!?]*") do
+        sentence = sentence:gsub("^%s+", ""):gsub("%s+$", "")
+        if sentence ~= "" then
+            sentences[#sentences + 1] = sentence
+        end
+    end
+    return sentences
+end
+
 function TTS:Initialize()
     if self.Initialized then
         return
     end
 
     local frame = CreateFrame("Frame")
+    frame:RegisterEvent("PLAYER_LOGOUT")
     frame:RegisterEvent("VOICE_CHAT_TTS_PLAYBACK_STARTED")
     frame:RegisterEvent("VOICE_CHAT_TTS_PLAYBACK_BOOKMARK")
     frame:RegisterEvent("VOICE_CHAT_TTS_PLAYBACK_FINISHED")
@@ -74,12 +119,14 @@ function TTS:Stop()
 
     session.cancelled = true
     self.CurrentSession = nil
+    OutLoud:Debug("TTS stopping session:", session.id)
     StopPlayback(self)
+    NotifySessionEnded(session, session.failed and "failed" or "cancelled")
 
     return true
 end
 
-function TTS:StartSession(mode, voiceID)
+function TTS:StartSession(mode, voiceID, onSessionEnded, onPlaybackStarted, onTextProgress)
     self:Initialize()
     self:Stop()
 
@@ -90,9 +137,13 @@ function TTS:StartSession(mode, voiceID)
         mode = mode,
         voiceID = voiceID,
         utterances = {},
+        onSessionEnded = onSessionEnded,
+        onPlaybackStarted = onPlaybackStarted,
+        onTextProgress = onTextProgress,
     }
 
     self.CurrentSession = session
+    OutLoud:Debug("TTS session:", session.id, "mode:", mode, "voice:", voiceID)
 
     return session
 end
@@ -100,7 +151,8 @@ end
 function TTS:SubmitText(session, text, chunk)
     local token = chunk or "WHOLE"
     local mark = "OUTLOUD:SPEECH:" .. session.id .. ":" .. token
-    local ok = pcall(
+    OutLoud:Debug("TTS SpeakText call: session:", session.id, "chunk:", token, "bytes:", #text)
+    local ok, message = pcall(
         C_VoiceChat.SpeakText,
         session.voiceID,
         '<bookmark mark="' .. mark .. '"/>' .. text,
@@ -110,6 +162,7 @@ function TTS:SubmitText(session, text, chunk)
     )
 
     if not ok then
+        OutLoud:Error("TTS SpeakText failed: session:", session.id, "error:", tostring(message))
         session.failed = true
 
         if self.CurrentSession == session then
@@ -140,52 +193,57 @@ function TTS:SubmitChunk(session, chunk)
     return self:SubmitText(session, sentence, chunk)
 end
 
-function TTS:SpeakStreaming(text, voiceID)
+function TTS:SpeakStreaming(text, voiceID, onSessionEnded, onPlaybackStarted, onTextProgress)
     local valid, reason = ValidInput(text, voiceID)
 
     if not valid then
         return false, reason
     end
 
-    local sentences = {}
-    text = text:gsub("%s+", " ")
-
-    for sentence in text:gmatch("[^.!?]+[.!?]*") do
-        sentence = sentence:gsub("^%s+", ""):gsub("%s+$", "")
-
-        if sentence ~= "" then
-            sentences[#sentences + 1] = sentence
-        end
-    end
+    local sentences = self:SplitSentences(text)
 
     if #sentences == 0 then
         return false, "no-sentences"
     end
 
-    local session = self:StartSession(self.ReadingModes.SPLIT, voiceID)
+    local session = self:StartSession(self.ReadingModes.SPLIT, voiceID, onSessionEnded, onPlaybackStarted, onTextProgress)
     session.sentences = sentences
     session.queued = {}
 
     return self:SubmitChunk(session, 1)
 end
 
-function TTS:SpeakWholeText(text, voiceID)
+function TTS:SpeakWholeText(text, voiceID, onSessionEnded, onPlaybackStarted, onTextProgress)
     local valid, reason = ValidInput(text, voiceID)
 
     if not valid then
         return false, reason
     end
 
-    local session = self:StartSession(self.ReadingModes.FULL, voiceID)
+    local session = self:StartSession(self.ReadingModes.FULL, voiceID, onSessionEnded, onPlaybackStarted, onTextProgress)
+    session.text = text
     return self:SubmitText(session, text)
 end
 
-function TTS:Speak(text, voiceID)
+function TTS:Speak(text, voiceID, onSessionEnded, onPlaybackStarted, onTextProgress)
     if OutLoud.Database:GetReadingMode() == self.ReadingModes.SPLIT then
-        return self:SpeakStreaming(text, voiceID)
+        return self:SpeakStreaming(text, voiceID, onSessionEnded, onPlaybackStarted, onTextProgress)
     end
 
-    return self:SpeakWholeText(text, voiceID)
+    return self:SpeakWholeText(text, voiceID, onSessionEnded, onPlaybackStarted, onTextProgress)
+end
+
+function TTS:GetBookmarkSession(sessionID)
+    local session = self.CurrentSession
+    if session and session.id == sessionID then
+        return session
+    end
+    -- The counter recognizes stale owned audio after old session tables are discarded.
+    if sessionID > 0 and sessionID <= self.SessionID then
+        if not self:Stop() then
+            StopPlayback(self)
+        end
+    end
 end
 
 function TTS:OnBookmark(utteranceID, bookmark)
@@ -201,33 +259,44 @@ function TTS:OnBookmark(utteranceID, bookmark)
         return
     end
 
-    local session = self.CurrentSession
-
-    if not session or session.id ~= sessionID then
-        -- The counter recognizes old output even after its tables are discarded.
-        -- StopSpeakingText is global, so also cancel any current session it stops.
-        if sessionID > 0 and sessionID <= self.SessionID then
-            if not self:Stop() then
-                StopPlayback(self)
-            end
-        end
-
-        return
-    end
+    local session = self:GetBookmarkSession(sessionID)
+    if not session then return end
 
     if session.mode == self.ReadingModes.SPLIT then
         if not chunk or not session.queued[chunk] then
             return
         end
 
+        if not session.utterances[utteranceID] then
+            OutLoud:Debug("TTS playback identified: session:", sessionID, "chunk:", chunk, "utterance:", utteranceID)
+        end
         session.utterances[utteranceID] = chunk
+        NotifyPlaybackStarted(session)
+        if not session.activeToken or chunk > session.activeToken then
+            session.activeToken = chunk
+            NotifyTextProgress(self, session, chunk, 0)
+        end
         self:SubmitChunk(session, chunk + 1)
     elseif token == "WHOLE" then
+        if not session.utterances[utteranceID] then
+            OutLoud:Debug("TTS playback identified: session:", sessionID, "whole text, utterance:", utteranceID)
+        end
         session.utterances[utteranceID] = token
+        NotifyPlaybackStarted(session)
+        if not session.activeToken then
+            session.activeToken = token
+            NotifyTextProgress(self, session, token, 0)
+        end
     end
 end
 
 function TTS:OnEvent(event, utteranceID, bookmark)
+    if event == "PLAYER_LOGOUT" then
+        -- Also emitted when /reload tears down the current UI.
+        self:Stop()
+        return
+    end
+
     if self.Stopping then
         return
     end
@@ -246,18 +315,29 @@ function TTS:OnEvent(event, utteranceID, bookmark)
 
     local token = session.utterances[utteranceID]
 
-    if event == "VOICE_CHAT_TTS_PLAYBACK_FAILED" then
+    if event == "VOICE_CHAT_TTS_PLAYBACK_STARTED" then
+        OutLoud:Debug("TTS PLAYBACK_STARTED: utterance:", tostring(utteranceID),
+            "owned:", token ~= nil, "Awaiting ownership bookmark if unidentified.")
+    elseif event == "VOICE_CHAT_TTS_PLAYBACK_FAILED" then
+        OutLoud:Debug("TTS PLAYBACK_FAILED: utterance:", tostring(utteranceID),
+            "status:", tostring(bookmark), "owned:", token ~= nil)
         -- Without an ownership bookmark, a failure could belong to other TTS.
         if token then
+            OutLoud:Error("TTS playback failed: session:", session.id, "status:", tostring(bookmark))
             session.failed = true
             self:Stop()
+        else
+            OutLoud:Debug("Failure is unidentified and may belong to other TTS; session state left unchanged.")
         end
     elseif event == "VOICE_CHAT_TTS_PLAYBACK_FINISHED" and token then
+        OutLoud:Debug("TTS playback finished: session:", session.id, "chunk:", token, "utterance:", utteranceID)
         session.utterances[utteranceID] = nil
 
         if token == "WHOLE" or token == #session.sentences then
             session.finished = true
             self.CurrentSession = nil
+            OutLoud:Debug("TTS session completed:", session.id)
+            NotifySessionEnded(session, "finished")
         end
     end
 end

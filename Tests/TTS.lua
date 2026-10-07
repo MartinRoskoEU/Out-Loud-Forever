@@ -7,10 +7,12 @@ local function Equal(actual, expected, message)
 end
 
 local function Harness()
-    local test = { calls = {}, order = {}, stops = 0, settings = 0, frames = 0 }
+    local test = { calls = {}, order = {}, diagnostics = {}, stops = 0, settings = 0, frames = 0 }
     local environment = setmetatable({}, { __index = _G })
     environment._G = environment
-    environment.print = function() error("Production speech must be silent") end
+    environment.print = function(...)
+        test.diagnostics[#test.diagnostics + 1] = { ... }
+    end
     environment.C_Timer = { After = function() error("Speech must not use timers") end }
     environment.VoiceSelection = nil
     environment.Enum = { TtsBoolSetting = { PlaySoundSeparatingChatLineBreaks = 0 } }
@@ -308,6 +310,27 @@ Test("Stop cancels once and is safe while idle", function()
     Equal(#test.calls, 2)
 end)
 
+Test("UI shutdown stops active narration in both modes and leaves idle TTS alone", function()
+    for _, method in ipairs({ "SpeakStreaming", "SpeakWholeText" }) do
+        local test = Harness()
+        local ended = 0
+        test.tts[method](test.tts, "First. Second.", 7, function(reason)
+            Equal(reason, "cancelled", "UI shutdown cancels the session")
+            ended = ended + 1
+        end)
+        Equal(test.frame.events.PLAYER_LOGOUT, true, "Listen for UI teardown")
+        local session = test.tts.CurrentSession
+        test.frame.callback(test.frame, "PLAYER_LOGOUT")
+        Equal(test.tts.CurrentSession, nil, "Clear the outgoing session")
+        Equal(session.cancelled, true, "Mark pending generation cancelled")
+        Equal(test.stops, 1, "Stop the native engine before UI unload")
+        Equal(ended, 1, "Notify presentation cleanup")
+        test.frame.callback(test.frame, "PLAYER_LOGOUT")
+        Equal(test.stops, 1, "Idle shutdown leaves other TTS alone")
+        Equal(ended, 1, "Cleanup runs only once")
+    end
+end)
+
 Test("Event frame and separator initialization occur once", function()
     local test = Harness()
     test.tts:SpeakStreaming(text, 7)
@@ -343,7 +366,7 @@ Test("Untracked events during submission cannot claim our session", function()
     Equal(test.stops, 0)
 end)
 
-Test("Native exceptions are silent and clear failed submissions", function()
+Test("Native exceptions clear failed submissions", function()
     local test = Harness()
     test.onSpeak = function() error("Engine rejected the request") end
     local accepted, reason = test.tts:SpeakStreaming(text, 7)
@@ -395,6 +418,71 @@ Test("Repeated sessions retain only the current session", function()
     Equal(test.tts.utteranceInfo, nil)
     test:Bookmark(1, 101)
     Equal(test.stops, 1, "Old output is recognized after cleanup")
+end)
+
+Test("Display callback leaves full speech payload unchanged", function()
+    local test = Harness()
+    local whole = '  Hello!\n<emphasis level="strong">Second sentence.</emphasis>\tEnd.  '
+    local updates = {}
+    test.tts:SpeakWholeText(whole, 7, nil, nil, function(spoken, chunk, offset)
+        updates[#updates + 1] = { spoken, chunk, offset }
+    end)
+    Equal(#test.calls, 1)
+    Equal(test.calls[1].spoken, whole, "UI display must not alter generation input")
+    Equal(#updates, 0, "Submission does not update playback text")
+    test:Bookmark(1, 101)
+    Equal(updates[1][1], whole)
+    Equal(updates[1][2], 0)
+    Equal(updates[1][3], 0)
+    test:Bookmark(1, 101)
+    test:Event("BOOKMARK", 101, "OUTLOUD:PROGRESS:1:WHOLE:6")
+    Equal(#updates, 1, "Duplicates and removed word markers cannot update text")
+    Equal(#test.calls, 1)
+    test:Event("FINISHED", 101)
+    Equal(test.tts.CurrentSession, nil)
+end)
+
+Test("Sentence display retains original generation and one-ahead behavior", function()
+    local test = Harness()
+    local updates = {}
+    test.tts:SpeakStreaming(text, 7, nil, nil, function(spoken, chunk, offset)
+        updates[#updates + 1] = { spoken, chunk, offset }
+    end)
+    Equal(test.calls[1].spoken, "First sentence.")
+    test:Bookmark(1, 101)
+    Equal(#test.calls, 2)
+    Equal(test.calls[2].spoken, "Second sentence.")
+    Equal(#updates, 1, "Prefetched sentence is not displayed")
+    Equal(updates[1][1], "First sentence.")
+    test:Event("BOOKMARK", 101, "OUTLOUD:PROGRESS:1:1:5")
+    Equal(#test.calls, 2, "Removed word markers cannot prefetch")
+    test:Bookmark(2, 102)
+    Equal(updates[#updates][1], "Second sentence.")
+    Equal(updates[#updates][3], 0)
+    Equal(#test.calls, 3)
+    local count = #updates
+    test:Bookmark(1, 101)
+    Equal(#updates, count, "Earlier sentence cannot regress the display")
+end)
+
+Test("Display callbacks tolerate reentrant cancellation and synchronous playback", function()
+    local test = Harness()
+    test.tts:SpeakStreaming(text, 7, nil, nil, function() test.tts:Stop() end)
+    test:Bookmark(1, 101)
+    Equal(test.tts.CurrentSession, nil)
+    Equal(#test.calls, 1, "Cancelled callback cannot prefetch")
+
+    test = Harness()
+    local updates = 0
+    test.onSpeak = function(index) test:Bookmark(index, 100 + index) end
+    test.tts:SpeakWholeText(text, 7, nil, nil, function(spoken, chunk, offset)
+        Equal(spoken, text)
+        Equal(chunk, 0)
+        Equal(offset, 0)
+        updates = updates + 1
+    end)
+    Equal(updates, 1)
+    Equal(test.calls[1].spoken, text)
 end)
 
 print("PASS: " .. passed .. " speech controller checks")

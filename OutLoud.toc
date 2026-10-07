@@ -12,10 +12,14 @@ Core\Namespace.lua
 Core\VoiceSelection.lua
 Core\Database.lua
 Core\TTS.lua
+Core\Narration.lua
 
 UI\Controls\ComboBox.lua
 UI\Controls\VoiceRow.lua
 UI\SettingsPage.lua
+UI\TalkingHead.xml
 UI\TalkingHead.lua
+UI\QuestIntegration.lua
+UI\QuestLogIntegration.lua
 
 Core\Init.lua

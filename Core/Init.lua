@@ -11,6 +11,8 @@ frame:SetScript("OnEvent", function(_, event, loadedAddonName)
     OutLoud.Database:Initialize()
     OutLoud.UI.SettingsPage:Initialize()
     OutLoud.UI.TalkingHead:Initialize()
+    OutLoud.UI.QuestIntegration:Initialize()
+    OutLoud.UI.QuestLogIntegration:Initialize()
 
     OutLoud.Loaded = true
 end)

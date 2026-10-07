@@ -9,6 +9,55 @@ VoiceSelection.Genders = {
     FEMALE = 3,
 }
 
+-- Locale-stable playable race tokens, restricted to established Voice Families.
+local playerRaceFamilies = {
+    Human = "HUMAN",
+    Orc = "ORC",
+    Dwarf = "DWARF",
+    NightElf = "NIGHT_ELF",
+    Scourge = "UNDEAD",
+    Tauren = "TAUREN",
+    Gnome = "GNOME",
+    Troll = "TROLL",
+    BloodElf = "BLOOD_ELF",
+    Draenei = "DRAENEI",
+    Goblin = "GOBLIN",
+}
+
+function VoiceSelection:ResolvePlayer()
+    local info = {}
+    if not UnitExists("player") then
+        info.reason = "unit-unavailable"
+        return nil, info
+    end
+
+    info.name = UnitName("player")
+    info.raceName, info.raceToken, info.raceID = UnitRace("player")
+    info.sex = UnitSex("player")
+    if info.sex == self.Genders.MALE then
+        info.gender = "MALE"
+    elseif info.sex == self.Genders.FEMALE then
+        info.gender = "FEMALE"
+    end
+
+    local familyKey = playerRaceFamilies[info.raceToken]
+    info.family = familyKey and OutLoud.VoiceMappings.Families[familyKey]
+    if not info.family then
+        info.reason = "unknown-player-race"
+        return nil, info
+    end
+    if not info.gender then
+        info.reason = "unknown-sex"
+        return nil, info
+    end
+
+    info.voiceID = OutLoud.Database:GetVoice(info.family, info.sex)
+    if info.voiceID == nil then
+        info.reason = "voice-not-set"
+    end
+    return info.voiceID, info
+end
+
 function VoiceSelection:GetFamilies()
     local mappings = OutLoud.VoiceMappings
     local unique = {}

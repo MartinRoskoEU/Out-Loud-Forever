@@ -3,6 +3,10 @@ local AddonName, OutLoud = ...
 local SettingsPage = {}
 OutLoud.UI.SettingsPage = SettingsPage
 
+local AUTO_NARRATION_LABEL = "Automatically read quest text"
+local AUTO_NARRATION_DESCRIPTION = "Automatically starts narration when opening quest details, quest progress, or quest reward pages. Quest Log narration remains manual."
+local AUTO_DELAY_DESCRIPTION = "Waits before automatically starting quest narration, allowing existing NPC dialogue to finish first. This delay does not affect manual narration."
+
 local VOICES_LAYOUT = {
     leftPadding = 10,
     rightPadding = 0,
@@ -113,8 +117,15 @@ function SettingsPage:UpdateScrollLayout()
     local descriptionWidth = math.max(1, math.min(620, content:GetWidth() - 45))
     self.FullDescription:SetWidth(descriptionWidth)
     self.SplitDescription:SetWidth(descriptionWidth)
+    if self.AutoNarrateDescription then
+        self.AutoNarrateDescription:SetWidth(descriptionWidth)
+    end
+    if self.AutoNarrationDelayDescription then
+        self.AutoNarrationDelayDescription:SetWidth(descriptionWidth)
+    end
 
-    local top, bottom = content:GetTop(), self.SplitDescription:GetBottom()
+    local lastDescription = self.AutoNarrationDelayDescription or self.AutoNarrateDescription or self.SplitDescription
+    local top, bottom = content:GetTop(), lastDescription:GetBottom()
     if top and bottom then
         content:SetHeight(math.max(1, top - bottom + 24))
     end
@@ -399,6 +410,18 @@ function SettingsPage:AnchorReadingSection(anchor)
     header:SetPoint("TOPRIGHT", anchor, "BOTTOMRIGHT", 0, -24)
 end
 
+function SettingsPage:RefreshAutoNarrationDelay()
+    local control = self.AutoNarrationDelaySlider
+    if not control then return end
+    local enabled = OutLoud.Database:GetAutoNarrateQuests()
+    self.SyncingAutoNarrationDelay = true
+    control:SetValue(OutLoud.Database:GetAutoNarrationDelay())
+    self.SyncingAutoNarrationDelay = false
+    control:SetEnabled(enabled)
+    self.AutoNarrationDelayLabel:SetFontObject(enabled and GameFontNormal or GameFontDisable)
+    self.AutoNarrationDelayDescription:SetFontObject(enabled and GameFontHighlightSmall or GameFontDisableSmall)
+end
+
 function SettingsPage:CreateReadingSection(anchor)
     local header = CreateFrame(
         "Frame",
@@ -410,7 +433,11 @@ function SettingsPage:CreateReadingSection(anchor)
     self.ReadingHeader = header
     self:AnchorReadingSection(anchor)
 
-    header.Title:SetText("Reading")
+    header.Title:SetText("Narration")
+
+    local modeLabel = self.Content:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+    modeLabel:SetPoint("TOPLEFT", header, "BOTTOMLEFT", 10, -18)
+    modeLabel:SetText("Reading Mode")
 
     local fullButton = CreateFrame(
         "CheckButton",
@@ -421,10 +448,10 @@ function SettingsPage:CreateReadingSection(anchor)
 
     fullButton:SetPoint(
         "TOPLEFT",
-        header,
+        modeLabel,
         "BOTTOMLEFT",
-        10,
-        -18
+        0,
+        -10
     )
 
     fullButton.text:SetFontObject(GameFontNormal)
@@ -494,6 +521,95 @@ function SettingsPage:CreateReadingSection(anchor)
         "Splits the text into smaller parts and sends them to TTS sequentially. Playback can begin sooner, especially for longer texts, but the voice model receives less context and pauses or changes in delivery between parts may be more noticeable."
     )
 
+    -- Native checkbox used by Forever's modern Settings controls.
+    ---@class OutLoudSettingsCheckbox : CheckButton
+    ---@field Init fun(self: OutLoudSettingsCheckbox, value: boolean, initTooltip?: function)
+    ---@field SetValue fun(self: OutLoudSettingsCheckbox, value: boolean)
+    ---@field RegisterCallback fun(self: OutLoudSettingsCheckbox, event: string, callback: function, owner: table)
+    ---@field HoverBackground Texture
+    local autoButton = CreateFrame("CheckButton", nil, self.Content, "SettingsCheckboxTemplate")
+    ---@cast autoButton OutLoudSettingsCheckbox
+    autoButton:SetSize(fullButton:GetWidth(), fullButton:GetHeight())
+    autoButton:SetPoint("TOPLEFT", splitDescription, "BOTTOMLEFT", -21, -16)
+    -- Keep the modern artwork within the same bounds as the radio controls.
+    for _, texture in ipairs({
+        autoButton:GetNormalTexture(), autoButton:GetPushedTexture(),
+        autoButton:GetCheckedTexture(), autoButton:GetDisabledCheckedTexture(),
+    }) do
+        texture:ClearAllPoints()
+        texture:SetAllPoints(autoButton)
+    end
+    autoButton:Init(OutLoud.Database:GetAutoNarrateQuests(), nil)
+    autoButton:SetScript("OnEnter", nil)
+    autoButton:SetScript("OnLeave", nil)
+    -- The native hover region anchors to the settings row's parent by default.
+    autoButton.HoverBackground:ClearAllPoints()
+    autoButton.HoverBackground:SetAllPoints(autoButton)
+    autoButton.HoverBackground:SetAlpha(0)
+    autoButton.HoverBackground:Hide()
+    autoButton:RegisterCallback(SettingsCheckboxMixin.Event.OnValueChanged, function(_, value)
+        OutLoud.Database:SetAutoNarrateQuests(value)
+        self:RefreshAutoNarrationDelay()
+    end, self)
+    autoButton:SetScript("OnShow", function()
+        autoButton:SetValue(OutLoud.Database:GetAutoNarrateQuests())
+        self:RefreshAutoNarrationDelay()
+    end)
+
+    local autoLabel = autoButton:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+    autoLabel:SetPoint("LEFT", autoButton, "RIGHT", 5, 0)
+    autoLabel:SetText(AUTO_NARRATION_LABEL)
+    -- Include only the label in the click area, leaving the description inactive.
+    autoButton:SetHitRectInsets(0, -(5 + autoLabel:GetStringWidth()), 0, 0)
+
+    local autoDescription = self.Content:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+    autoDescription:SetPoint("TOPLEFT", autoButton, "BOTTOMLEFT", 21, -5)
+    autoDescription:SetWidth(620)
+    autoDescription:SetJustifyH("LEFT")
+    autoDescription:SetJustifyV("TOP")
+    autoDescription:SetWordWrap(true)
+    autoDescription:SetText(AUTO_NARRATION_DESCRIPTION)
+
+    local delayLabel = self.Content:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+    delayLabel:SetPoint("TOPLEFT", autoDescription, "BOTTOMLEFT", -21, -18)
+    delayLabel:SetText("Automatic narration delay")
+
+    -- The same native slider/stepper implementation used by Forever Settings.
+    ---@class OutLoudSettingsDelaySlider : Frame
+    ---@field Init fun(self: OutLoudSettingsDelaySlider, value: number, minimum: number, maximum: number, steps: number, formatters: table)
+    ---@field SetValue fun(self: OutLoudSettingsDelaySlider, value: number)
+    ---@field SetEnabled fun(self: OutLoudSettingsDelaySlider, enabled: boolean)
+    ---@field RegisterCallback fun(self: OutLoudSettingsDelaySlider, event: string, callback: function, owner: table)
+    ---@field Label table
+    ---@field Event table
+    local delayControl = CreateFrame("Frame", nil, self.Content, "MinimalSliderWithSteppersTemplate")
+    ---@cast delayControl OutLoudSettingsDelaySlider
+    delayControl:SetWidth(250)
+    delayControl:SetPoint("TOPLEFT", delayLabel, "BOTTOMLEFT", 0, -8)
+    local range = OutLoud.Database.AutoNarrationDelay
+    delayControl:Init(OutLoud.Database:GetAutoNarrationDelay(), range.MIN, range.MAX,
+        (range.MAX - range.MIN) / range.STEP, {
+            [delayControl.Label.Right] = function(value)
+                return string.format("%g s", value)
+            end,
+        })
+    delayControl:RegisterCallback(delayControl.Event.OnValueChanged, function(_, value)
+        if not self.SyncingAutoNarrationDelay and OutLoud.Database:GetAutoNarrateQuests() then
+            OutLoud.Database:SetAutoNarrationDelay(value)
+        end
+    end, self)
+    delayControl:HookScript("OnShow", function()
+        self:RefreshAutoNarrationDelay()
+    end)
+
+    local delayDescription = self.Content:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+    delayDescription:SetPoint("TOPLEFT", delayControl, "BOTTOMLEFT", 21, -8)
+    delayDescription:SetWidth(620)
+    delayDescription:SetJustifyH("LEFT")
+    delayDescription:SetJustifyV("TOP")
+    delayDescription:SetWordWrap(true)
+    delayDescription:SetText(AUTO_DELAY_DESCRIPTION)
+
     local function Refresh()
         local mode = OutLoud.Database:GetReadingMode()
 
@@ -528,4 +644,10 @@ function SettingsPage:CreateReadingSection(anchor)
     self.SplitTextButton = splitButton
     self.FullDescription = fullDescription
     self.SplitDescription = splitDescription
+    self.AutoNarrateQuestsCheckbox = autoButton
+    self.AutoNarrateDescription = autoDescription
+    self.AutoNarrationDelaySlider = delayControl
+    self.AutoNarrationDelayLabel = delayLabel
+    self.AutoNarrationDelayDescription = delayDescription
+    self:RefreshAutoNarrationDelay()
 end

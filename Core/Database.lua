@@ -3,6 +3,22 @@ local AddonName, OutLoud = ...
 local Database = {}
 OutLoud.Database = Database
 
+Database.AutoNarrationDelay = {
+    DEFAULT = 2,
+    MIN = 0,
+    MAX = 5,
+    STEP = 0.5,
+}
+
+local function NormalizeAutoNarrationDelay(value)
+    local range = Database.AutoNarrationDelay
+    if type(value) ~= "number" or value ~= value then
+        return range.DEFAULT
+    end
+    value = math.max(range.MIN, math.min(range.MAX, value))
+    return math.floor(value / range.STEP + 0.5) * range.STEP
+end
+
 -- Snapshot of the numeric keys used by the original SavedVariables schema.
 -- Available Options families always come from the generated data instead.
 local LegacyFamilies = {
@@ -31,6 +47,11 @@ function Database:Initialize()
     if type(db.voices) ~= "table" then
         db.voices = {}
     end
+
+    if db.autoNarrateQuests == nil then
+        db.autoNarrateQuests = false
+    end
+    db.autoNarrationDelay = NormalizeAutoNarrationDelay(db.autoNarrationDelay)
 
     if db.voiceSettingsVersion == nil then
         for raceID, family in pairs(LegacyFamilies) do
@@ -88,4 +109,20 @@ end
 
 function Database:SetReadingMode(mode)
     self.DB.readingMode = mode
+end
+
+function Database:GetAutoNarrateQuests()
+    return self.DB.autoNarrateQuests == true
+end
+
+function Database:SetAutoNarrateQuests(enabled)
+    self.DB.autoNarrateQuests = enabled == true
+end
+
+function Database:GetAutoNarrationDelay()
+    return NormalizeAutoNarrationDelay(self.DB.autoNarrationDelay)
+end
+
+function Database:SetAutoNarrationDelay(delay)
+    self.DB.autoNarrationDelay = NormalizeAutoNarrationDelay(delay)
 end

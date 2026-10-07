@@ -1,7 +1,7 @@
 # Out Loud
 
 Out Loud is a World of Warcraft: Forever addon in development for reading quest
-text aloud with configurable NPC voices.
+text aloud with configurable voices.
 
 ## Overview
 
@@ -10,9 +10,11 @@ speaking NPC's visual model family and runtime gender. A Blizzard-style Talking
 Head presentation is intended to show the speaker and dialogue while speech is
 generated and played.
 
-The voice configuration, voice resolver, Talking Head UI, and speech controller
-are implemented as separate components. Automatic quest narration is not yet
-connected to them.
+Manual Out Loud buttons connect current quest dialogue to the NPC's voice, or
+selected Quest Log descriptions to the player's voice, Talking Head, and speech.
+QuestFrame narration can also start automatically when enabled in Options;
+Quest Log narration remains manual. Talking Head closes when narration ends,
+and the loading spinner clears when owned playback begins.
 
 ## Current Features
 
@@ -20,11 +22,22 @@ connected to them.
 - Generated mappings from NPC model FileDataIDs to Voice Families.
 - A runtime voice resolver that combines the model family with `UnitSex(unit)`
   and returns the configured voice.
-- A custom Talking Head UI with an NPC portrait, name, dialogue text, faction
-  styling, close button, and a controllable loading spinner.
+- A custom Talking Head UI with a speaker portrait, name, dialogue text, faction
+  styling, opening/closing fades, a close button that stops narration, and a
+  controllable loading spinner.
 - A speech controller that accepts supplied text and a WoW TTS voice ID,
   supports sentence streaming and whole-text speech, and can cancel narration.
 - A saved reading-mode setting used by the speech dispatcher.
+- Optional automatic narration for quest offer, progress, and reward pages,
+  disabled by default. Manual buttons remain available.
+- A manual **Out Loud** button for quest offer, progress, and reward dialogue.
+  It uses the current NPC's portrait and voice, falling back to the player when
+  the NPC's voice cannot be resolved, and reads the current dialogue.
+  Talking Head closes when narration finishes or stops.
+  The button hides on quest greeting/list screens and when the quest window closes.
+- A manual **Out Loud** button opposite **Back** in selected Quest Log details.
+  It reads the description using the player's portrait, name, and configured
+  voice. Gameplay objectives are excluded.
 
 ## How Voice Selection Works
 
@@ -37,6 +50,13 @@ NPC UnitSex      -> Male / Female
 
 It combines the family and gender to choose the player's configured voice.
 Gender comes from the live NPC, rather than the model mapping.
+
+If QuestFrame cannot resolve a usable NPC voice, the player reads the same quest
+text using their configured race and gender voice.
+
+Quest Log narration uses the player's race and runtime gender to select from the
+same Voice Family assignments. Unmapped races and unset voices produce an error
+instead of selecting a fallback voice.
 
 Multiple model IDs can share one Voice Family and the same voice configuration.
 For example, the two Skyborne model IDs in the Forever mapping both use
@@ -53,38 +73,48 @@ once, regardless of how many models use it. Assignments are saved between sessio
 
 ## Speech Modes
 
-The **Reading** section of Options offers two modes:
+The **Narration** section of Options offers two reading modes:
 
 - **Split text:** reads sentence by sentence, submitting the first sentence
   immediately and prefetching one sentence ahead as playback begins.
 - **Read full text** (default): sends the complete text to TTS in one request.
 
-The speech dispatcher uses this choice whenever a caller supplies text and a
-voice. Automatic quest-triggered speech is still to be integrated.
+Talking Head displays the full dialogue in full mode and the currently spoken
+sentence in split mode. Sentence changes use a brief text-only fade.
+Overflowing text scrolls gently once playback begins and has a scrollbar for
+manual reading. Scrolling manually pauses automatic movement for that text.
+
+Both Out Loud quest buttons use this choice. Clicking again restarts narration
+through the speech controller.
+
+Enable **Automatically read quest text** in the same section to start narration
+when quest details, progress, or reward pages open. It defaults to off and does
+not apply to Quest Log. **Automatic narration delay** waits 2 seconds by default,
+adjustable from 0 to 5 seconds in 0.5-second steps. The delay control is available
+when automatic narration is enabled. Manual narration always starts immediately.
 
 ## Project Status
 
-The mappings, saved voice configuration, voice resolver, Talking Head UI, and
-TTS controller are implemented as separate components. Automatic quest
-narration and its UI integration are still in development.
-
-Still to integrate:
-
-- Automatic quest-dialog detection and quest-text extraction.
-- Connecting quest text and the speaking NPC to voice resolution and speech.
-- Connecting Talking Head visibility and loading/playback state to narration.
+The mappings, saved voice configuration, voice resolver, Talking Head UI, TTS
+controller, manual QuestFrame and Quest Log narration, and optional automatic
+QuestFrame narration are implemented.
+The dialogue text APIs and NPC voice resolver have been verified in-game by the
+user. The combined
+button, Talking Head, and speech flow still requires verification in WoW: Forever.
 
 ## Architecture
 
 The addon separates voice resolution, speech, and presentation:
 
 - Generated Voice Family mappings connect NPC visual models to configurable families.
-- `VoiceSelection` combines those mappings with `UnitSex` gender detection to
-  resolve a configured voice.
+- `VoiceSelection` resolves an NPC model or player race to a family, then uses
+  `UnitSex` gender detection to select a configured voice.
 - The TTS controller speaks supplied text with a supplied voice and applies the
   selected speech mode.
 - Talking Head provides the speaker portrait, dialogue display, and loading state.
-- Quest integration will supply the NPC and text and connect these components.
+- Quest integrations supply live dialogue with the NPC as speaker, or a selected
+  quest description with the player as speaker. A shared narration controller
+  coordinates Talking Head with the TTS lifecycle.
 
 ## Development
 

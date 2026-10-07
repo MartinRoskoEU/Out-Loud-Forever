@@ -1,0 +1,4 @@
+/DevResources/
+.vscode/
+.idea/
+*.log
